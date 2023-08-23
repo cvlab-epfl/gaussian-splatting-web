@@ -134,7 +134,6 @@ export class Camera {
 export class InteractiveCamera {
     private camera: Camera;
     private canvas: HTMLCanvasElement;
-    private window: Window;
 
     private drag: boolean = false;
     private oldX: number = 0;
@@ -151,7 +150,6 @@ export class InteractiveCamera {
     constructor(camera: Camera, canvas: HTMLCanvasElement) {
         this.camera = camera;
         this.canvas = canvas;
-        this.window = window;
 
         this.createCallbacks();
     }
@@ -190,22 +188,32 @@ export class InteractiveCamera {
         }, false);
 
         window.addEventListener('keydown', (e) => {
-            if (!'wsad'.includes(e.key)) {
-                return;
+            const keyMap: {[key: string]: () => void} = {
+                // translation
+                'w': () => { this.dTY -= 0.1 },
+                's': () => { this.dTY += 0.1 },
+                'a': () => { this.dTX -= 0.1 },
+                'd': () => { this.dTX += 0.1 },
+                'q': () => { this.dTZ += 0.1 },
+                'e': () => { this.dTZ -= 0.1 },
+
+                // rotation
+                'j': () => { this.dRX += 0.1 },
+                'l': () => { this.dRX -= 0.1 },
+                'i': () => { this.dRY += 0.1 },
+                'k': () => { this.dRY -= 0.1 },
+                'u': () => { this.dRZ += 0.1 },
+                'o': () => { this.dRZ -= 0.1 },
             }
 
-            if (e.key === 'w') {
-                this.dTY = -0.1;
-            } else if (e.key === 's') {
-                this.dTY = 0.1;
-            } else if (e.key === 'a') {
-                this.dTX = -0.1;
-            } else if (e.key === 'd') {
-                this.dTX = 0.1;
-            };
-            this.setDirty();
+            if (!keyMap[e.key]) {
+                return;
+            } else {
+                keyMap[e.key]();
+                this.setDirty();
+                e.preventDefault();
+            }
 
-            e.preventDefault();
         }, false);
     }
 
