@@ -2,6 +2,7 @@ import { PackingType, StaticArray, Struct, vec3, vec4, f32 } from "./packing";
 import { Vec3 } from "wgpu-matrix";
 
 export function loadFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
+    /* loads a file as an ArrayBuffer (i.e. a binary blob) */
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
 
@@ -30,6 +31,11 @@ export function loadFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
 }
 
 export class PackedGaussians {
+    /* A class that
+        1) reads the binary blob from a .ply file
+        2) converts internally into a structured representation
+        3) packs the structured representation into a flat array of bytes as expected by the shaders
+    */
     numGaussians: number;
     sphericalHarmonicsDegree: number;
 
@@ -40,6 +46,12 @@ export class PackedGaussians {
     gaussiansBuffer: ArrayBuffer;
 
     private static decodeHeader(plyArrayBuffer: ArrayBuffer): [number, Record<string, string>, DataView] {
+        /* decodes the .ply file header and returns a tuple of:
+            * - vertexCount: number of vertices in the point cloud
+            * - propertyTypes: a map from property names to their types
+            * - vertexData: a DataView of the vertex data
+        */
+
         const decoder = new TextDecoder();
         let headerOffset = 0;
         let headerText = '';
@@ -89,6 +101,10 @@ export class PackedGaussians {
     }
 
     private readRawVertex(offset: number, vertexData: DataView, propertyTypes: Record<string, string>): [number, Record<string, number>] {
+        /* reads a single vertex from the vertexData DataView and returns a tuple of:
+            * - offset: the offset of the next vertex in the vertexData DataView
+            * - rawVertex: a map from property names to their values
+        */
         let rawVertex: Record<string, number> = {};
 
         for (const property in propertyTypes) {
@@ -106,6 +122,7 @@ export class PackedGaussians {
     }
 
     public get nShCoeffs(): number {
+        /* returns the expected number of spherical harmonics coefficients */
         if (this.sphericalHarmonicsDegree === 0) {
             return 1;
         } else if (this.sphericalHarmonicsDegree === 1) {
@@ -120,6 +137,7 @@ export class PackedGaussians {
     }
 
     private arrangeVertex(rawVertex: Record<string, number>, shFeatureOrder: string[]): Record<string, any> {
+        /* arranges a raw vertex into a vertex that can be packed by the gaussianLayout utility */
         const shCoeffs = [];
         for (let i = 0; i < this.nShCoeffs; ++i) {
             const coeff = [];
