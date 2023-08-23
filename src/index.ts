@@ -3,6 +3,11 @@ import { CameraFileParser, InteractiveCamera } from './camera';
 import { Renderer } from './renderer';
 
 const canvas = document.getElementById("canvas-webgpu") as HTMLCanvasElement;
+
+if (!navigator.gpu) {
+    alert("WebGPU not supported on this browser! (navigator.gpu is null)");
+}
+
 let interactiveCamera = InteractiveCamera.default(canvas);
 
 var currentRenderer: Renderer;
