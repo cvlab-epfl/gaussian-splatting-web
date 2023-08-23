@@ -14,6 +14,8 @@ var currentRenderer: Renderer;
 
 function handlePlyChange(event: any) {
     const file = event.target.files[0];
+    const loadingPopup = document.getElementById('loading-popup')!;
+
 
     async function onFileLoad(arrayBuffer: ArrayBuffer) {
         if (currentRenderer) {
@@ -23,12 +25,15 @@ function handlePlyChange(event: any) {
         try {
             const renderer = await Renderer.init(canvas, gaussians, interactiveCamera);
             currentRenderer = renderer; // bind to the global scope
+            loadingPopup.style.display = 'none'; // hide loading popup
         } catch (error) {
+            loadingPopup.style.display = 'none'; // hide loading popup
             alert(error);
         }
     }
 
     if (file) {
+        loadingPopup.style.display = 'block'; // show loading popup
         loadFileAsArrayBuffer(file)
             .then(onFileLoad)
             .catch((error) => {

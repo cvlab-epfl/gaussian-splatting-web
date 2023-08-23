@@ -70,13 +70,26 @@
         #cameraList li.selected {
             background-color: #ccc;
         }
+
+        #loading-popup {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(120, 120, 120, 0.8);
+            padding: 10px;
+            border-radius: 5px;
+            display: none; /* Hide it initially */
+        }
     </style>
 </head>
 
 <body>
+    <div id="loading-popup">Loading .ply, this may take from seconds to a couple of minutes</div>
+
     <div id="container">
         <div id="drawArea">
-            <canvas id="canvas-webgpu" width="500" height="500"></canvas>
+            <canvas id="canvas-webgpu" width="700" height="700"></canvas>
         </div>
         <div id="sidebar">
             <div id="controls">
