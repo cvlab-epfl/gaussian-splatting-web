@@ -20,20 +20,27 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let k = uniforms.k;
     
     let ixj = i ^ j;
-    if (ixj > i) {
-        if ((i & k) == 0 && data.values[i] > data.values[ixj]) {
-            let temp = data.values[i];
-            data.values[i] = data.values[ixj];
-            data.values[ixj] = temp;
-        }
-        if ((i & k) != 0 && data.values[i] < data.values[ixj]) {
-            let temp = data.values[i];
-            data.values[i] = data.values[ixj];
-            data.values[ixj] = temp;
-        }
+
+    if (ixj <= i) {
+        return;
+    }
+
+    if ((i & k) == 0 && data.values[i] > data.values[ixj]) {
+        let temp = data.values[i];
+        data.values[i] = data.values[ixj];
+        data.values[ixj] = temp;
+    }
+    if ((i & k) != 0 && data.values[i] < data.values[ixj]) {
+        let temp = data.values[i];
+        data.values[i] = data.values[ixj];
+        data.values[ixj] = temp;
     }
 }
 `;
+}
+
+function nextPowerOfTwo(x: number): number {
+    return Math.pow(2, Math.ceil(Math.log2(x)));
 }
 
 async function bitonicSortWebGPU(values: Float32Array): Promise<Float32Array> {
@@ -49,13 +56,18 @@ async function bitonicSortWebGPU(values: Float32Array): Promise<Float32Array> {
     }
     const device = await adapter.requestDevice();
 
+    const paddedLength = nextPowerOfTwo(values.length);
+    const paddedValues = new Float32Array(paddedLength);
+    paddedValues.set(values);
+    paddedValues.fill(Infinity, values.length);
+
     const dataBuffer = device.createBuffer({
-        size: values.byteLength,
+        size: paddedValues.byteLength,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
         mappedAtCreation: true
     });
 
-    new Float32Array(dataBuffer.getMappedRange()).set(values);
+    new Float32Array(dataBuffer.getMappedRange()).set(paddedValues);
     dataBuffer.unmap();
 
     const uniformBufferSize = 8; // Size of two uint32 values
@@ -97,7 +109,7 @@ async function bitonicSortWebGPU(values: Float32Array): Promise<Float32Array> {
         device.queue.writeBuffer(uniformsBuffer, 0, uniformsArray.buffer);
     };
 
-    for (let k = 2; k <= values.length; k <<= 1) {
+    for (let k = 2; k <= paddedLength; k <<= 1) {
        for (let j = k >> 1; j > 0; j = j >> 1) {
            const commandEncoder = device.createCommandEncoder();
 
@@ -105,7 +117,7 @@ async function bitonicSortWebGPU(values: Float32Array): Promise<Float32Array> {
            const passEncoder = commandEncoder.beginComputePass();
            passEncoder.setPipeline(pipeline);
            passEncoder.setBindGroup(0, bindGroup);
-           passEncoder.dispatchWorkgroups(values.length);
+           passEncoder.dispatchWorkgroups(paddedLength);
            passEncoder.end();
            device.queue.submit([commandEncoder.finish()]);
        }
@@ -128,12 +140,15 @@ async function bitonicSortWebGPU(values: Float32Array): Promise<Float32Array> {
 
 export function testBitonic() {
     // Usage example
-    const values: Float32Array = new Float32Array(1 << 5);
-    //const values: Float32Array = new Float32Array(1_000_000);
+    const values: Float32Array = new Float32Array(32 + 3);
     for (let i = 0; i < values.length; i++) {
         values[i] = Math.random();
     }
     
+    // reference CPU sort
+    const sorted = values.slice().sort((a, b) => a - b);
+    console.log(sorted);
+
     bitonicSortWebGPU(values).then(sorted => {
         console.log(sorted);
     });
