@@ -1,4 +1,4 @@
-function bitonicSortShader(): string {
+function bitonicSortShader(itemsPerThread: number): string {
     return `
 struct Data {
     values: array<f32>,
@@ -15,25 +15,26 @@ struct Uniforms {
 
 @compute @workgroup_size(1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let i = global_id.x;
     let j = uniforms.j;
     let k = uniforms.k;
     
-    let ixj = i ^ j;
+    for (var i = global_id.x * ${itemsPerThread}; i < (global_id.x + 1) * ${itemsPerThread}; i++) {
+        let ixj = i ^ j;
 
-    if (ixj <= i) {
-        return;
-    }
+        if (ixj <= i) {
+            continue;
+        }
 
-    if ((i & k) == 0 && data.values[i] > data.values[ixj]) {
-        let temp = data.values[i];
-        data.values[i] = data.values[ixj];
-        data.values[ixj] = temp;
-    }
-    if ((i & k) != 0 && data.values[i] < data.values[ixj]) {
-        let temp = data.values[i];
-        data.values[i] = data.values[ixj];
-        data.values[ixj] = temp;
+        if ((i & k) == 0 && data.values[i] > data.values[ixj]) {
+            let temp = data.values[i];
+            data.values[i] = data.values[ixj];
+            data.values[ixj] = temp;
+        }
+        if ((i & k) != 0 && data.values[i] < data.values[ixj]) {
+            let temp = data.values[i];
+            data.values[i] = data.values[ixj];
+            data.values[ixj] = temp;
+        }
     }
 }
 `;
@@ -76,10 +77,12 @@ async function bitonicSortWebGPU(values: Float32Array): Promise<Float32Array> {
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
     });
 
+    const numThreads = 1024;
+    const itemsPerThread = Math.ceil(paddedLength / numThreads);
     const pipeline = device.createComputePipeline({
         compute: {
             module: device.createShaderModule({
-                code: bitonicSortShader(),
+                code: bitonicSortShader(itemsPerThread),
             }),
             entryPoint: 'main',
         },
@@ -117,7 +120,7 @@ async function bitonicSortWebGPU(values: Float32Array): Promise<Float32Array> {
            const passEncoder = commandEncoder.beginComputePass();
            passEncoder.setPipeline(pipeline);
            passEncoder.setBindGroup(0, bindGroup);
-           passEncoder.dispatchWorkgroups(paddedLength);
+           passEncoder.dispatchWorkgroups(numThreads);
            passEncoder.end();
            device.queue.submit([commandEncoder.finish()]);
        }
@@ -140,7 +143,7 @@ async function bitonicSortWebGPU(values: Float32Array): Promise<Float32Array> {
 
 export function testBitonic() {
     // Usage example
-    const values: Float32Array = new Float32Array(32 + 3);
+    const values: Float32Array = new Float32Array(1_000_000);
     for (let i = 0; i < values.length; i++) {
         values[i] = Math.random();
     }
