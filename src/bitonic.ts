@@ -1,6 +1,4 @@
-function bitonicSortShader(
-    blockSize: number,
-): string {
+function bitonicSortShader(): string {
     return `
 struct Data {
     values: array<f32>,
@@ -15,9 +13,9 @@ struct Uniforms {
 @binding(0) @group(0) var<storage, read_write> data: Data;
 @binding(1) @group(0) var<uniform> uniforms: Uniforms;
 
-@compute @workgroup_size(1, 1, 1)
+@compute @workgroup_size(1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let i = global_id.x + global_id.y * ${blockSize} + global_id.z * ${blockSize} * ${blockSize};
+    let i = global_id.x;
     let j = uniforms.j;
     let k = uniforms.k;
     
@@ -66,12 +64,10 @@ async function bitonicSortWebGPU(values: Float32Array): Promise<Float32Array> {
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
     });
 
-    const groupSize = 1;
-    const blockSize = 1024;
     const pipeline = device.createComputePipeline({
         compute: {
             module: device.createShaderModule({
-                code: bitonicSortShader(blockSize),
+                code: bitonicSortShader(),
             }),
             entryPoint: 'main',
         },
@@ -109,7 +105,7 @@ async function bitonicSortWebGPU(values: Float32Array): Promise<Float32Array> {
            const passEncoder = commandEncoder.beginComputePass();
            passEncoder.setPipeline(pipeline);
            passEncoder.setBindGroup(0, bindGroup);
-           passEncoder.dispatchWorkgroups(values.length / groupSize);
+           passEncoder.dispatchWorkgroups(values.length);
            passEncoder.end();
            device.queue.submit([commandEncoder.finish()]);
        }
@@ -132,7 +128,7 @@ async function bitonicSortWebGPU(values: Float32Array): Promise<Float32Array> {
 
 export function testBitonic() {
     // Usage example
-    const values: Float32Array = new Float32Array(64_000);
+    const values: Float32Array = new Float32Array(1 << 5);
     //const values: Float32Array = new Float32Array(1_000_000);
     for (let i = 0; i < values.length; i++) {
         values[i] = Math.random();
