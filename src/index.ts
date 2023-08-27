@@ -43,11 +43,11 @@ function handlePlyChange(event: any) {
     }
 }
 
-const plyFileInput = document.getElementById('plyButton');
-plyFileInput!.addEventListener('change', handlePlyChange);
+// const plyFileInput = document.getElementById('plyButton');
+// plyFileInput!.addEventListener('change', handlePlyChange);
 
-const cameraFileInput = document.getElementById('cameraButton')! as HTMLInputElement;
-const cameraList = document.getElementById('cameraList')! as HTMLUListElement;
-new CameraFileParser(cameraFileInput, cameraList, canvas, interactiveCamera.setNewCamera.bind(interactiveCamera));
+// const cameraFileInput = document.getElementById('cameraButton')! as HTMLInputElement;
+// const cameraList = document.getElementById('cameraList')! as HTMLUListElement;
+// new CameraFileParser(cameraFileInput, cameraList, canvas, interactiveCamera.setNewCamera.bind(interactiveCamera));
 
-//testBitonic();
+testBitonic();

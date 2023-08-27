@@ -44,106 +44,145 @@ function nextPowerOfTwo(x: number): number {
     return Math.pow(2, Math.ceil(Math.log2(x)));
 }
 
-async function bitonicSortWebGPU(values: Float32Array): Promise<Float32Array> {
-    // Initialization
-    const gpu = navigator.gpu;
-    if (!gpu) {
-        return Promise.reject("WebGPU not supported on this browser! (navigator.gpu is null)");
+class GpuContext {
+    gpu: GPU;
+    adapter: GPUAdapter;
+    device: GPUDevice;
+
+    constructor(gpu: GPU, adapter: GPUAdapter, device: GPUDevice) {
+        this.gpu = gpu;
+        this.adapter = adapter;
+        this.device = device;
     }
 
-    const adapter = await gpu.requestAdapter();
-    if (!adapter) {
-        return Promise.reject("WebGPU not supported on this browser! (gpu.adapter is null)");
+    static async create(): Promise<GpuContext> {
+        const gpu = navigator.gpu;
+        if (!gpu) {
+            return Promise.reject("WebGPU not supported on this browser! (navigator.gpu is null)");
+        }
+
+        const adapter = await gpu.requestAdapter();
+        if (!adapter) {
+            return Promise.reject("WebGPU not supported on this browser! (gpu.adapter is null)");
+        }
+
+        const device = await adapter.requestDevice();
+
+        return new GpuContext(gpu, adapter, device);
     }
-    const device = await adapter.requestDevice();
+}
 
-    const paddedLength = nextPowerOfTwo(values.length);
-    const paddedValues = new Float32Array(paddedLength);
-    paddedValues.set(values);
-    paddedValues.fill(Infinity, values.length);
+export class BitonicSorter {
+    context: GpuContext;
 
-    const dataBuffer = device.createBuffer({
-        size: paddedValues.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-        mappedAtCreation: true
-    });
+    nElements: number;
+    numThreads: number;
 
-    new Float32Array(dataBuffer.getMappedRange()).set(paddedValues);
-    dataBuffer.unmap();
+    pipeline: GPUComputePipeline;
+    bindGroup: GPUBindGroup;
 
-    const uniformBufferSize = 8; // Size of two uint32 values
-    const uniformsBuffer = device.createBuffer({
-        size: uniformBufferSize,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-    });
+    dataBuffer: GPUBuffer;
+    uniformsBuffer: GPUBuffer;
 
-    const numThreads = 1024;
-    const itemsPerThread = Math.ceil(paddedLength / numThreads);
-    const pipeline = device.createComputePipeline({
-        compute: {
-            module: device.createShaderModule({
-                code: bitonicSortShader(itemsPerThread),
-            }),
-            entryPoint: 'main',
-        },
-        layout: 'auto',
-    });
+    constructor(context: GpuContext, nElements: number) {
+        if (Math.log2(nElements) % 1 != 0) {
+            throw new Error("nElements must be a power of 2");
+        }
 
-    const bindGroup = device.createBindGroup({
-        layout: pipeline.getBindGroupLayout(0),
-        entries: [
-            {
-                binding: 0,
-                resource: {
-                    buffer: dataBuffer
-                }
+        this.context = context;
+        this.nElements = nElements;
+        this.dataBuffer = this.context.device.createBuffer({
+            size: this.nElements * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+            mappedAtCreation: false,
+        });
+
+        const uniformBufferSize = 8; // Size of two uint32 values
+        this.uniformsBuffer = this.context.device.createBuffer({
+            size: uniformBufferSize,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        });
+
+        this.numThreads = 1024;
+        const itemsPerThread = Math.ceil(this.nElements / this.numThreads);
+        this.pipeline = this.context.device.createComputePipeline({
+            compute: {
+                module: this.context.device.createShaderModule({
+                    code: bitonicSortShader(itemsPerThread),
+                }),
+                entryPoint: 'main',
             },
-            {
-                binding: 1,
-                resource: {
-                    buffer: uniformsBuffer
-                }
-            }
-        ],
-    });
+            layout: 'auto',
+        });
 
-    const setUniforms = (j: number, k: number) => {
+        this.bindGroup = this.context.device.createBindGroup({
+            layout: this.pipeline.getBindGroupLayout(0),
+            entries: [
+                {
+                    binding: 0,
+                    resource: {
+                        buffer: this.dataBuffer
+                    }
+                },
+                {
+                    binding: 1,
+                    resource: {
+                        buffer: this.uniformsBuffer
+                    }
+                }
+            ],
+        });
+    }
+
+    private setUniforms(j: number, k: number): void {
         const uniformsArray = new Uint32Array([j, k]);
-        device.queue.writeBuffer(uniformsBuffer, 0, uniformsArray.buffer);
+        this.context.device.queue.writeBuffer(this.uniformsBuffer, 0, uniformsArray.buffer);
     };
 
-    for (let k = 2; k <= paddedLength; k <<= 1) {
-       for (let j = k >> 1; j > 0; j = j >> 1) {
-           const commandEncoder = device.createCommandEncoder();
+    /* Sorts the values in the input buffer and returns the sorted values in a new buffer.
+        Input size must be a power of two. */
+    sort(values: GPUBuffer): GPUBuffer {
+        if (values.size != this.dataBuffer.size) {
+            throw new Error("Input buffer size does not match the size of the sorter");
+        }
 
-           setUniforms(j, k);
-           const passEncoder = commandEncoder.beginComputePass();
-           passEncoder.setPipeline(pipeline);
-           passEncoder.setBindGroup(0, bindGroup);
-           passEncoder.dispatchWorkgroups(numThreads);
-           passEncoder.end();
-           device.queue.submit([commandEncoder.finish()]);
-       }
+        // Copy the data to the GPU
+        {
+            const commandEncoder = this.context.device.createCommandEncoder();
+            commandEncoder.clearBuffer(this.dataBuffer);
+            commandEncoder.copyBufferToBuffer(values, 0, this.dataBuffer, 0, values.size);
+            this.context.device.queue.submit([commandEncoder.finish()]);
+        }
+
+        // Sort
+        for (let k = 2; k <= this.nElements; k <<= 1) {
+            for (let j = k >> 1; j > 0; j = j >> 1) {
+                const commandEncoder = this.context.device.createCommandEncoder();
+
+                this.setUniforms(j, k);
+                const passEncoder = commandEncoder.beginComputePass();
+                passEncoder.setPipeline(this.pipeline);
+                passEncoder.setBindGroup(0, this.bindGroup);
+                passEncoder.dispatchWorkgroups(this.numThreads);
+                passEncoder.end();
+                this.context.device.queue.submit([commandEncoder.finish()]);
+            }
+        }
+
+        // Read back the data
+        {
+            const commandEncoder = this.context.device.createCommandEncoder();
+            commandEncoder.copyBufferToBuffer(this.dataBuffer, 0, values, 0, values.size);
+            this.context.device.queue.submit([commandEncoder.finish()]);
+        }
+
+        return values;
     }
-
-    // Read back the data
-    const readBuffer = device.createBuffer({
-        size: values.byteLength,
-        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
-    });
-
-    const cmdEncoder = device.createCommandEncoder();
-    cmdEncoder.copyBufferToBuffer(dataBuffer, 0, readBuffer, 0, values.byteLength);
-    device.queue.submit([cmdEncoder.finish()]);
-
-    await readBuffer.mapAsync(GPUMapMode.READ);
-    const output = new Float32Array(readBuffer.getMappedRange());
-    return output;
 }
 
 export function testBitonic() {
     // Usage example
-    const values: Float32Array = new Float32Array(1_000_000);
+    const values: Float32Array = new Float32Array(1 << 10);
     for (let i = 0; i < values.length; i++) {
         values[i] = Math.random();
     }
@@ -152,7 +191,32 @@ export function testBitonic() {
     const sorted = values.slice().sort((a, b) => a - b);
     console.log(sorted);
 
-    bitonicSortWebGPU(values).then(sorted => {
-        console.log(sorted);
+    // GPU sort
+    GpuContext.create().then(context => {
+        const sorter = new BitonicSorter(context, values.length);
+        const valuesBuffer = context.device.createBuffer({
+            size: values.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+            mappedAtCreation: true,
+        });
+        new Float32Array(valuesBuffer.getMappedRange()).set(values);
+        valuesBuffer.unmap();
+
+        const sortedBuffer = sorter.sort(valuesBuffer);
+
+        const readBuffer = context.device.createBuffer({
+            size: values.byteLength,
+            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+            mappedAtCreation: false,
+        });
+        const commandEncoder = context.device.createCommandEncoder();
+        commandEncoder.copyBufferToBuffer(sortedBuffer, 0, readBuffer, 0, values.byteLength);
+        context.device.queue.submit([commandEncoder.finish()]);
+
+        readBuffer.mapAsync(GPUMapMode.READ).then(() => {
+            const result = new Float32Array(readBuffer.getMappedRange());
+            console.log(result);
+            readBuffer.unmap();
+        });
     });
 }
