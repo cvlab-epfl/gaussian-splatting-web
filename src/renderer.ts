@@ -49,6 +49,9 @@ export class Renderer {
     drawOrder: number[];
     pointPositions: Vec3[];
 
+    uniformsBindGroup: GPUBindGroup;
+    pointDataBindGroup: GPUBindGroup;
+
     pipeline: GPURenderPipeline;
 
     destroyCallback: (() => void) | null = null;
@@ -161,6 +164,26 @@ export class Renderer {
             },
         });
 
+        this.uniformsBindGroup = this.context.device.createBindGroup({
+            layout: this.pipeline.getBindGroupLayout(0),
+            entries: [{
+                binding: 0,
+                resource: {
+                    buffer: this.uniformBuffer,
+                },
+            }],
+        });
+
+        this.pointDataBindGroup = this.context.device.createBindGroup({
+            layout: this.pipeline.getBindGroupLayout(1),
+            entries: [{
+                binding: 1,
+                resource: {
+                    buffer: this.pointDataBuffer,
+                },
+            }],
+        });
+
         // point positions for sorting by depth
         this.pointPositions = gaussians.positionsArray;
         // sorting is faster on partially sorted lists so we keep the old indices around,
@@ -239,24 +262,9 @@ export class Renderer {
 
         const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
         passEncoder.setPipeline(this.pipeline);
-        passEncoder.setBindGroup(0, this.context.device.createBindGroup({
-            layout: this.pipeline.getBindGroupLayout(0),
-            entries: [{
-                binding: 0,
-                resource: {
-                    buffer: this.uniformBuffer,
-                },
-            }],
-        }));
-        passEncoder.setBindGroup(1, this.context.device.createBindGroup({
-            layout: this.pipeline.getBindGroupLayout(1),
-            entries: [{
-                binding: 1,
-                resource: {
-                    buffer: this.pointDataBuffer,
-                },
-            }],
-        }));
+
+        passEncoder.setBindGroup(0, this.uniformsBindGroup);
+        passEncoder.setBindGroup(1, this.pointDataBindGroup);
 
         passEncoder.setIndexBuffer(this.drawIndexBuffer, "uint32" as GPUIndexFormat)
         passEncoder.drawIndexed(this.drawOrder.length * 2 * 3, 1, 0, 0, 0);
