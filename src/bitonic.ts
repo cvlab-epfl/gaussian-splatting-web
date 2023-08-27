@@ -4,6 +4,10 @@ struct Data {
     values: array<f32>,
 };
 
+struct Indices {
+    values: array<u32>,
+};
+
 // Uniform buffer to store j and k
 struct Uniforms {
     j: u32,
@@ -11,7 +15,8 @@ struct Uniforms {
 };
 
 @binding(0) @group(0) var<storage, read_write> data: Data;
-@binding(1) @group(0) var<uniform> uniforms: Uniforms;
+@binding(1) @group(0) var<storage, read_write> indices: Indices;
+@binding(2) @group(0) var<uniform> uniforms: Uniforms;
 
 @compute @workgroup_size(1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -26,14 +31,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 
         if ((i & k) == 0 && data.values[i] > data.values[ixj]) {
-            let temp = data.values[i];
+            let tempV = data.values[i];
             data.values[i] = data.values[ixj];
-            data.values[ixj] = temp;
+            data.values[ixj] = tempV;
+
+            let tempI = indices.values[i];
+            indices.values[i] = indices.values[ixj];
+            indices.values[ixj] = tempI;
         }
         if ((i & k) != 0 && data.values[i] < data.values[ixj]) {
-            let temp = data.values[i];
+            let tempV = data.values[i];
             data.values[i] = data.values[ixj];
-            data.values[ixj] = temp;
+            data.values[ixj] = tempV;
+
+            let tempI = indices.values[i];
+            indices.values[i] = indices.values[ixj];
+            indices.values[ixj] = tempI;
         }
     }
 }
@@ -81,7 +94,9 @@ export class BitonicSorter {
     pipeline: GPUComputePipeline;
     bindGroup: GPUBindGroup;
 
-    dataBuffer: GPUBuffer;
+    valuesBuffer: GPUBuffer; // The buffer to sort
+    indicesBuffer: GPUBuffer; // The indices of the values (to be sorted)
+    initialIndexBuffer: GPUBuffer; // The initial indices of the values, to copy from at each call
     uniformsBuffer: GPUBuffer;
 
     constructor(context: GpuContext, nElements: number) {
@@ -91,11 +106,29 @@ export class BitonicSorter {
 
         this.context = context;
         this.nElements = nElements;
-        this.dataBuffer = this.context.device.createBuffer({
+        this.valuesBuffer = this.context.device.createBuffer({
             size: this.nElements * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
             mappedAtCreation: false,
         });
+
+        this.indicesBuffer = this.context.device.createBuffer({
+            size: this.nElements * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+            mappedAtCreation: false,
+        });
+
+        this.initialIndexBuffer = this.context.device.createBuffer({
+            size: this.nElements * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+            mappedAtCreation: true,
+        });
+
+        const initialIndices = new Uint32Array(this.initialIndexBuffer.getMappedRange());
+        for (let i = 0; i < this.nElements; i++) {
+            initialIndices[i] = i;
+        }
+        this.initialIndexBuffer.unmap();
 
         const uniformBufferSize = 8; // Size of two uint32 values
         this.uniformsBuffer = this.context.device.createBuffer({
@@ -121,11 +154,17 @@ export class BitonicSorter {
                 {
                     binding: 0,
                     resource: {
-                        buffer: this.dataBuffer
+                        buffer: this.valuesBuffer
                     }
                 },
                 {
                     binding: 1,
+                    resource: {
+                        buffer: this.indicesBuffer,
+                    }
+                },
+                {
+                    binding: 2,
                     resource: {
                         buffer: this.uniformsBuffer
                     }
@@ -139,18 +178,22 @@ export class BitonicSorter {
         this.context.device.queue.writeBuffer(this.uniformsBuffer, 0, uniformsArray.buffer);
     };
 
-    /* Sorts the values in the input buffer and returns the sorted values in a new buffer.
-        Input size must be a power of two. */
-    sort(values: GPUBuffer): GPUBuffer {
-        if (values.size != this.dataBuffer.size) {
+    argsort(values: GPUBuffer): GPUBuffer {
+        if (values.size != this.valuesBuffer.size) {
             throw new Error("Input buffer size does not match the size of the sorter");
         }
 
         // Copy the data to the GPU
         {
             const commandEncoder = this.context.device.createCommandEncoder();
-            commandEncoder.clearBuffer(this.dataBuffer);
-            commandEncoder.copyBufferToBuffer(values, 0, this.dataBuffer, 0, values.size);
+            // clear just in case
+            commandEncoder.clearBuffer(this.valuesBuffer);
+            // copy the values
+            commandEncoder.copyBufferToBuffer(values, 0, this.valuesBuffer, 0, values.size);
+
+            // write the initial indices
+            commandEncoder.copyBufferToBuffer(this.initialIndexBuffer, 0, this.indicesBuffer, 0, this.initialIndexBuffer.size);
+
             this.context.device.queue.submit([commandEncoder.finish()]);
         }
 
@@ -169,14 +212,7 @@ export class BitonicSorter {
             }
         }
 
-        // Read back the data
-        {
-            const commandEncoder = this.context.device.createCommandEncoder();
-            commandEncoder.copyBufferToBuffer(this.dataBuffer, 0, values, 0, values.size);
-            this.context.device.queue.submit([commandEncoder.finish()]);
-        }
-
-        return values;
+        return this.indicesBuffer;
     }
 }
 
@@ -187,11 +223,19 @@ export function testBitonic() {
         values[i] = Math.random();
     }
     
-    // reference CPU sort
-    const sorted = values.slice().sort((a, b) => a - b);
-    console.log(sorted);
+    // reference CPU argsort
+    const valuesWithIndices: [number, number][] = [];
+    for (let i = 0; i < values.length; i++) {
+        valuesWithIndices.push([values[i], i]);
+    }
+    valuesWithIndices.sort((a, b) => a[0] - b[0]);
+    const cpuResult = new Uint32Array(values.length);
+    for (let i = 0; i < values.length; i++) {
+        cpuResult[i] = valuesWithIndices[i][1];
+    }
+    console.log(cpuResult);
 
-    // GPU sort
+    // GPU argsort
     GpuContext.create().then(context => {
         const sorter = new BitonicSorter(context, values.length);
         const valuesBuffer = context.device.createBuffer({
@@ -202,7 +246,7 @@ export function testBitonic() {
         new Float32Array(valuesBuffer.getMappedRange()).set(values);
         valuesBuffer.unmap();
 
-        const sortedBuffer = sorter.sort(valuesBuffer);
+        const argSortBuffer = sorter.argsort(valuesBuffer);
 
         const readBuffer = context.device.createBuffer({
             size: values.byteLength,
@@ -210,11 +254,11 @@ export function testBitonic() {
             mappedAtCreation: false,
         });
         const commandEncoder = context.device.createCommandEncoder();
-        commandEncoder.copyBufferToBuffer(sortedBuffer, 0, readBuffer, 0, values.byteLength);
+        commandEncoder.copyBufferToBuffer(argSortBuffer, 0, readBuffer, 0, values.byteLength);
         context.device.queue.submit([commandEncoder.finish()]);
 
         readBuffer.mapAsync(GPUMapMode.READ).then(() => {
-            const result = new Float32Array(readBuffer.getMappedRange());
+            const result = new Uint32Array(readBuffer.getMappedRange());
             console.log(result);
             readBuffer.unmap();
         });
