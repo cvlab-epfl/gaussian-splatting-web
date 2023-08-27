@@ -44,6 +44,8 @@ export class Renderer {
 
     uniformBuffer: GPUBuffer;
     pointDataBuffer: GPUBuffer;
+    drawIndexBuffer: GPUBuffer;
+    drawIndexWriteBuffer: GPUBuffer;
     drawOrder: number[];
     pointPositions: Vec3[];
 
@@ -119,7 +121,6 @@ export class Renderer {
         new Uint8Array(this.pointDataBuffer.getMappedRange()).set(new Uint8Array(gaussians.gaussiansBuffer));
         this.pointDataBuffer.unmap();
 
-
         // Create a GPU buffer for the uniform data.
         this.uniformBuffer = device.createBuffer({
             size: uniformLayout.size,
@@ -171,13 +172,68 @@ export class Renderer {
         // sorting is faster on partially sorted lists so we keep the old indices around,
         // initialized to the identity permutation 
         this.drawOrder = Array.from(Array(this.pointPositions.length).keys());
+        
+        // create a buffer with the draw order and a copy buffer for it
+        this.drawIndexBuffer = device.createBuffer({
+            size: 6 * 4 * this.drawOrder.length,
+            usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+            mappedAtCreation: false,
+        });
+
+        this.drawIndexWriteBuffer = device.createBuffer({
+            size: 6 * 4 * this.drawOrder.length,
+            usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.MAP_WRITE,
+            mappedAtCreation: false,
+        });
 
         // start the animation loop
         requestAnimationFrame(() => this.animate());
     }
 
-    draw(nextFrameCallback: FrameRequestCallback) {
+    private destroyImpl(): void {
+        if (this.destroyCallback === null) {
+            throw new Error("destroyImpl called without destroyCallback set!");
+        }
+
+        this.uniformBuffer.destroy();
+        this.pointDataBuffer.destroy();
+        this.drawIndexBuffer.destroy();
+        this.drawIndexWriteBuffer.destroy();
+        this.device.destroy();
+        this.adapter = null as any;
+        this.device = null as any;
+        this.contextGpu = null as any;
+        this.pipeline = null as any;
+        this.destroyCallback();
+    }
+
+    async draw(nextFrameCallback: FrameRequestCallback): Promise<void> {
         const commandEncoder = this.device.createCommandEncoder();
+
+        // this.drawOrder is in terms of quads, but we draw vertices
+        // so we need to convert the draw order to a vertex draw order
+        const triangleDrawOrder = [];
+        for (let i = 0; i < this.drawOrder.length; i++) {
+            const quadIndex = this.drawOrder[i];
+            for (let j = 0; j < 6; j++) {
+                triangleDrawOrder.push(6 * quadIndex + j);
+            }
+        }
+
+        // copy the draw order to the draw index buffer
+        // first map the write buffer
+        await this.drawIndexWriteBuffer.mapAsync(GPUMapMode.WRITE);
+        new Uint32Array(this.drawIndexWriteBuffer.getMappedRange()).set(triangleDrawOrder);
+        this.drawIndexWriteBuffer.unmap();
+
+        // copy the write buffer to the draw index buffer
+        commandEncoder.copyBufferToBuffer(
+            this.drawIndexWriteBuffer,
+            0,
+            this.drawIndexBuffer,
+            0,
+            6 * 4 * this.drawOrder.length,
+        );
 
         const textureView = this.contextGpu.getCurrentTexture().createView();
         const renderPassDescriptor: GPURenderPassDescriptor = {
@@ -210,12 +266,8 @@ export class Renderer {
             }],
         }));
 
-        //passEncoder.draw(6 * gaussians.numPoints, 1, 0, 0);
-        for (let i = 0; i < this.drawOrder.length; i++) {
-            const quadId = this.drawOrder[i];
-            passEncoder.draw(6, 1, 6 * quadId, 0);
-        }
-
+        passEncoder.setIndexBuffer(this.drawIndexBuffer, "uint32" as GPUIndexFormat)
+        passEncoder.drawIndexed(this.drawOrder.length * 2 * 3, 1, 0, 0, 0);
         passEncoder.end();
 
         this.device.queue.submit([commandEncoder.finish()]);
@@ -223,14 +275,7 @@ export class Renderer {
         if (this.destroyCallback === null) {
             requestAnimationFrame(nextFrameCallback);
         } else {
-            this.uniformBuffer.destroy();
-            this.pointDataBuffer.destroy();
-            this.device.destroy();
-            this.adapter = null as any;
-            this.device = null as any;
-            this.contextGpu = null as any;
-            this.pipeline = null as any;
-            this.destroyCallback();
+            this.destroyImpl();
         }
     }
 
