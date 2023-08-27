@@ -1,3 +1,5 @@
+import { GpuContext } from "./gpu_context";
+
 function bitonicSortShader(itemsPerThread: number): string {
     return `
 struct Data {
@@ -55,34 +57,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 function nextPowerOfTwo(x: number): number {
     return Math.pow(2, Math.ceil(Math.log2(x)));
-}
-
-class GpuContext {
-    gpu: GPU;
-    adapter: GPUAdapter;
-    device: GPUDevice;
-
-    constructor(gpu: GPU, adapter: GPUAdapter, device: GPUDevice) {
-        this.gpu = gpu;
-        this.adapter = adapter;
-        this.device = device;
-    }
-
-    static async create(): Promise<GpuContext> {
-        const gpu = navigator.gpu;
-        if (!gpu) {
-            return Promise.reject("WebGPU not supported on this browser! (navigator.gpu is null)");
-        }
-
-        const adapter = await gpu.requestAdapter();
-        if (!adapter) {
-            return Promise.reject("WebGPU not supported on this browser! (gpu.adapter is null)");
-        }
-
-        const device = await adapter.requestDevice();
-
-        return new GpuContext(gpu, adapter, device);
-    }
 }
 
 export class BitonicSorter {

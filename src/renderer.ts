@@ -10,9 +10,10 @@
 
 import { PackedGaussians } from './ply';
 import { f32, Struct, vec3, mat4x4 } from './packing';
-import { Camera, InteractiveCamera } from './camera';
+import { InteractiveCamera } from './camera';
 import { getShaderCode } from './shaders';
 import { Mat4, Vec3 } from 'wgpu-matrix';
+import { GpuContext } from './gpu_context';
 
 const uniformLayout = new Struct([
     ['viewMatrix', new mat4x4(f32)],
@@ -38,8 +39,7 @@ export class Renderer {
     canvas: HTMLCanvasElement;
     interactiveCamera: InteractiveCamera;
 
-    adapter: GPUAdapter;
-    device: GPUDevice;
+    context: GpuContext;
     contextGpu: GPUCanvasContext;
 
     uniformBuffer: GPUBuffer;
@@ -53,22 +53,20 @@ export class Renderer {
 
     destroyCallback: (() => void) | null = null;
 
-    // we need an async init function because we need to request certain async methods
-    public static async init(canvas: HTMLCanvasElement, gaussians: PackedGaussians, interactiveCamera: InteractiveCamera): Promise<Renderer> {
-        if (!canvas) {
-            return Promise.reject("Canvas not found!");
-        }
-
-        if (!navigator.gpu) {
+    public static async requestContext(gaussians: PackedGaussians): Promise<GpuContext> {
+        const gpu = navigator.gpu;
+        if (!gpu) {
             return Promise.reject("WebGPU not supported on this browser! (navigator.gpu is null)");
         }
-        const adapter = await navigator.gpu.requestAdapter();
+
+        const adapter = await gpu.requestAdapter();
         if (!adapter) {
-            return Promise.reject("WebGPU is not supported on this browser! (WebGPU adapter not found)");
+            return Promise.reject("WebGPU not supported on this browser! (gpu.adapter is null)");
         }
 
         const byteLength = gaussians.gaussiansBuffer.byteLength;
         // for good measure, we request 1.5 times the amount of memory we need
+        
         const device = await adapter.requestDevice({
             requiredLimits: {
                 maxStorageBufferBindingSize: 1.5 * byteLength,
@@ -76,12 +74,7 @@ export class Renderer {
             }
         });
 
-        const contextGpu = canvas.getContext("webgpu");
-        if (!contextGpu) {
-            return Promise.reject("WebGPU context not found!");
-        }
-
-        return new Renderer(canvas, interactiveCamera, gaussians, adapter, device, contextGpu);
+        return new GpuContext(gpu, adapter, device);
     }
 
     // destroy the renderer and return a promise that resolves when it's done (after the next frame)
@@ -91,29 +84,30 @@ export class Renderer {
         });
     }
 
-    private constructor(
+    constructor(
         canvas: HTMLCanvasElement,
         interactiveCamera: InteractiveCamera,
         gaussians: PackedGaussians,
-        adapter: GPUAdapter,
-        device: GPUDevice,
-        contextGPU: GPUCanvasContext,
+        context: GpuContext,
     ) {
         this.canvas = canvas;
         this.interactiveCamera = interactiveCamera;
-        this.adapter = adapter;
-        this.device = device;
-        this.contextGpu = contextGPU;
+        this.context = context;
+        const contextGpu = canvas.getContext("webgpu");
+        if (!contextGpu) {
+            throw new Error("WebGPU context not found!");
+        }
+        this.contextGpu = contextGpu;
 
         const presentationFormat = "rgba16float" as GPUTextureFormat;
 
         this.contextGpu.configure({
-            device,
+            device: this.context.device,
             format: presentationFormat,
             alphaMode: 'premultiplied' as GPUCanvasAlphaMode,
         });
 
-        this.pointDataBuffer = device.createBuffer({
+        this.pointDataBuffer = this.context.device.createBuffer({
             size: gaussians.gaussianArrayLayout.size,
             usage: GPUBufferUsage.STORAGE,
             mappedAtCreation: true,
@@ -122,15 +116,15 @@ export class Renderer {
         this.pointDataBuffer.unmap();
 
         // Create a GPU buffer for the uniform data.
-        this.uniformBuffer = device.createBuffer({
+        this.uniformBuffer = this.context.device.createBuffer({
             size: uniformLayout.size,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
         const shaderCode = getShaderCode(canvas, gaussians.sphericalHarmonicsDegree, gaussians.nShCoeffs);
-        const shaderModule = device.createShaderModule({ code: shaderCode });
+        const shaderModule = this.context.device.createShaderModule({ code: shaderCode });
 
-        this.pipeline = device.createRenderPipeline({
+        this.pipeline = this.context.device.createRenderPipeline({
             layout: "auto",
             vertex: {
                 module: shaderModule,
@@ -174,13 +168,13 @@ export class Renderer {
         this.drawOrder = Array.from(Array(this.pointPositions.length).keys());
         
         // create a buffer with the draw order and a copy buffer for it
-        this.drawIndexBuffer = device.createBuffer({
+        this.drawIndexBuffer = this.context.device.createBuffer({
             size: 6 * 4 * this.drawOrder.length,
             usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
             mappedAtCreation: false,
         });
 
-        this.drawIndexWriteBuffer = device.createBuffer({
+        this.drawIndexWriteBuffer = this.context.device.createBuffer({
             size: 6 * 4 * this.drawOrder.length,
             usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.MAP_WRITE,
             mappedAtCreation: false,
@@ -199,16 +193,14 @@ export class Renderer {
         this.pointDataBuffer.destroy();
         this.drawIndexBuffer.destroy();
         this.drawIndexWriteBuffer.destroy();
-        this.device.destroy();
-        this.adapter = null as any;
-        this.device = null as any;
+        this.context.destroy();
         this.contextGpu = null as any;
         this.pipeline = null as any;
         this.destroyCallback();
     }
 
     async draw(nextFrameCallback: FrameRequestCallback): Promise<void> {
-        const commandEncoder = this.device.createCommandEncoder();
+        const commandEncoder = this.context.device.createCommandEncoder();
 
         // this.drawOrder is in terms of quads, but we draw vertices
         // so we need to convert the draw order to a vertex draw order
@@ -247,7 +239,7 @@ export class Renderer {
 
         const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
         passEncoder.setPipeline(this.pipeline);
-        passEncoder.setBindGroup(0, this.device.createBindGroup({
+        passEncoder.setBindGroup(0, this.context.device.createBindGroup({
             layout: this.pipeline.getBindGroupLayout(0),
             entries: [{
                 binding: 0,
@@ -256,7 +248,7 @@ export class Renderer {
                 },
             }],
         }));
-        passEncoder.setBindGroup(1, this.device.createBindGroup({
+        passEncoder.setBindGroup(1, this.context.device.createBindGroup({
             layout: this.pipeline.getBindGroupLayout(1),
             entries: [{
                 binding: 1,
@@ -270,7 +262,7 @@ export class Renderer {
         passEncoder.drawIndexed(this.drawOrder.length * 2 * 3, 1, 0, 0, 0);
         passEncoder.end();
 
-        this.device.queue.submit([commandEncoder.finish()]);
+        this.context.device.queue.submit([commandEncoder.finish()]);
 
         if (this.destroyCallback === null) {
             requestAnimationFrame(nextFrameCallback);
@@ -305,7 +297,7 @@ export class Renderer {
         };
         uniformLayout.pack(0, uniforms, new DataView(uniformsMatrixBuffer));
 
-        this.device.queue.writeBuffer(
+        this.context.device.queue.writeBuffer(
             this.uniformBuffer,
             0,
             uniformsMatrixBuffer,

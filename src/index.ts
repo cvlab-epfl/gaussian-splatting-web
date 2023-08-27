@@ -24,7 +24,8 @@ function handlePlyChange(event: any) {
         }
         const gaussians = new PackedGaussians(arrayBuffer);
         try {
-            const renderer = await Renderer.init(canvas, gaussians, interactiveCamera);
+            const context = await Renderer.requestContext(gaussians);
+            const renderer = new Renderer(canvas, interactiveCamera, gaussians, context);
             currentRenderer = renderer; // bind to the global scope
             loadingPopup.style.display = 'none'; // hide loading popup
         } catch (error) {
@@ -43,11 +44,11 @@ function handlePlyChange(event: any) {
     }
 }
 
-// const plyFileInput = document.getElementById('plyButton');
-// plyFileInput!.addEventListener('change', handlePlyChange);
+const plyFileInput = document.getElementById('plyButton');
+plyFileInput!.addEventListener('change', handlePlyChange);
 
-// const cameraFileInput = document.getElementById('cameraButton')! as HTMLInputElement;
-// const cameraList = document.getElementById('cameraList')! as HTMLUListElement;
-// new CameraFileParser(cameraFileInput, cameraList, canvas, interactiveCamera.setNewCamera.bind(interactiveCamera));
+const cameraFileInput = document.getElementById('cameraButton')! as HTMLInputElement;
+const cameraList = document.getElementById('cameraList')! as HTMLUListElement;
+new CameraFileParser(cameraFileInput, cameraList, canvas, interactiveCamera.setNewCamera.bind(interactiveCamera));
 
-testBitonic();
+//testBitonic();
