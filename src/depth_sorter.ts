@@ -8,33 +8,27 @@ function nextPowerOfTwo(x: number): number {
 }
 
 // the depth of each vertex is computed, the excess space is padded with +inf
-function computeDepthShader(itemsPerThread: number): string {
+function computeDepthShader(itemsPerThread: number, numQuadsUnpadded: number): string {
     return `
-@group(0) @binding(0) var<storage, read_write> vertices: array<vec3<f32>>;
+struct Vertices {
+    values: array<vec3<f32>>,
+}
+
+@group(0) @binding(0) var<storage, read> vertices: Vertices;
 @group(0) @binding(1) var<storage, read_write> depths: array<f32>;
 @group(0) @binding(2) var<uniform> projMatrix: mat4x4<f32>;
 
 @compute @workgroup_size(1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let i = global_id.x;
-    //let blah = vertices[i];
-    //let foo = projMatrix * vec4<f32>(blah, 1.0);
-    depths[i] = 1.0;
-
-    //for (var i = global_id.x * ${itemsPerThread}; i < (global_id.x + 1) * ${itemsPerThread}; i++) {
-    //    //depths[i] = 1.0;
-    //    //if (i >= arrayLength(&vertices)) {
-    //    //    depths[i] = 100000000; // almost +inf
-    //    //} else {
-    //    //    let pos = vertices[i];
-    //    //    let projPos = projMatrix * vec4<f32>(pos, 1.0);
-    //    //    depths[i] = projPos.z;
-    //    //}
-    //    let pos = vertices[i];
-    //    let projPos = projMatrix * vec4<f32>(pos, 1.0);
-    //    //depths[i] = projPos.z;
-    //    depths[i] = 1.0;
-    //}
+    for (var i = global_id.x * ${itemsPerThread}; i < (global_id.x + 1) * ${itemsPerThread}; i++) {
+        if (i >= ${numQuadsUnpadded}) {
+            depths[i] = 1000000; // pad with +inf
+        } else {
+            let pos = vertices.values[i];
+            let projPos = projMatrix * vec4<f32>(pos, 1.0);
+            depths[i] = projPos.z;
+        }
+    }
 }
 `
 }
@@ -53,11 +47,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
         let index = indices[i];
 
-        //for (var vertex = 0u; vertex < 6; vertex++) {
-        //    indexBuffer[i * 6 + vertex] = index * 6 + vertex;
-        //}
         for (var vertex = 0u; vertex < 6; vertex++) {
-            indexBuffer[i * 6 + vertex] = i * 6 + vertex;
+            indexBuffer[i * 6 + vertex] = index * 6 + vertex;
         }
     }
 }
@@ -76,6 +67,7 @@ export class DepthSorter {
     projMatrixBuffer: GPUBuffer; // projection matrix, set at each frame
     depthBuffer: GPUBuffer; // depth values, computed each time using uniforms, padded to next power of 2
     indexBuffer: GPUBuffer; // resulting index buffer, per vertex, 6 * #nElements
+    indicesReadoutBuffer: GPUBuffer; // readout of the depth buffer, for debugging
 
     computeDepthPipeline: GPUComputePipeline;
     computeDepthBindGroup: GPUBindGroup;
@@ -106,19 +98,26 @@ export class DepthSorter {
             label: "depthSorter.depthBuffer"
         });
 
+        this.indicesReadoutBuffer = this.context.device.createBuffer({
+            size: this.nPadded * 4, // f32
+            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+            label: "depthSorter.depthReadoutBuffer"
+        });
+
         this.projMatrixBuffer = this.context.device.createBuffer({
             size: projMatrixLayout.size,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
             label: "depthSorter.projMatrixBuffer"
         });
 
+        // manually create the bind group layout because this.computeDepthPipeline.getBindGroupLayout(0) doesn't work for some reason
         const computeDepthBindGroupLayout = this.context.device.createBindGroupLayout({
             entries: [
                 {
                     binding: 0,
                     visibility: GPUShaderStage.COMPUTE,
                     buffer: {
-                        type: 'storage' as GPUBufferBindingType,
+                        type: 'read-only-storage' as GPUBufferBindingType,
                     },
                 },
                 {
@@ -144,28 +143,17 @@ export class DepthSorter {
 
         const itemsPerThread = Math.ceil(this.nElements / this.numThreads);
         this.computeDepthPipeline = this.context.device.createComputePipeline({
-            layout: computeDepthPipelineLayout,
+            layout: computeDepthPipelineLayout, // would be easier to say layout: 'auto'
             compute: {
                 module: this.context.device.createShaderModule({
-                    code: computeDepthShader(itemsPerThread),
+                    code: computeDepthShader(itemsPerThread, this.nElements),
                 }),
                 entryPoint: 'main',
             },
         });
-        //this.computeDepthPipeline = this.context.device.createComputePipeline({
-        //    compute: {
-        //        module: this.context.device.createShaderModule({
-        //            code: computeDepthShader(itemsPerThread),
-        //        }),
-        //        entryPoint: 'main',
-        //    },
-        //});
-
-        // manually create the bind group because the layout is not auto-detectable
 
         this.computeDepthBindGroup = this.context.device.createBindGroup({
-
-            //layout: this.computeDepthPipeline.getBindGroupLayout(0),
+            //layout: this.computeDepthPipeline.getBindGroupLayout(0), // this doesn't work for some reason
             layout: computeDepthBindGroupLayout,
             entries: [
                 {
@@ -245,11 +233,12 @@ export class DepthSorter {
             passEncoder.setBindGroup(0, this.computeDepthBindGroup);
             passEncoder.dispatchWorkgroups(this.numThreads);
             passEncoder.end();
+
             this.context.device.queue.submit([commandEncoder.finish()]);
         }
 
         // discard the result because we have already bound this.sorter.indicesBuffer to the copyToIndexBufferBindGroup
-        //this.sorter.argsort(this.depthBuffer);
+        this.sorter.argsort(this.depthBuffer);
 
         { // copy the indices to the index buffer
             const commandEncoder = this.context.device.createCommandEncoder();
