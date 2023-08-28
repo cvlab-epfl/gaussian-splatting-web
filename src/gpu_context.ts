@@ -20,7 +20,7 @@ export class GpuContext {
             return Promise.reject("WebGPU not supported on this browser! (gpu.adapter is null)");
         }
 
-        const device = await adapter.requestDevice();
+        const device = await adapter.requestDevice({label: "GPUDevice"});
 
         return new GpuContext(gpu, adapter, device);
     }

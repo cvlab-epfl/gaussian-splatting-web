@@ -55,10 +55,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 `;
 }
 
-function nextPowerOfTwo(x: number): number {
-    return Math.pow(2, Math.ceil(Math.log2(x)));
-}
-
 export class BitonicSorter {
     context: GpuContext;
 
@@ -84,18 +80,21 @@ export class BitonicSorter {
             size: this.nElements * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
             mappedAtCreation: false,
+            label: "bitonicSorter.valuesBuffer"
         });
 
         this.indicesBuffer = this.context.device.createBuffer({
             size: this.nElements * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
             mappedAtCreation: false,
+            label: "bitonicSorter.indicesBuffer"
         });
 
         this.initialIndexBuffer = this.context.device.createBuffer({
             size: this.nElements * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
             mappedAtCreation: true,
+            label: "bitonicSorter.initialIndexBuffer"
         });
 
         const initialIndices = new Uint32Array(this.initialIndexBuffer.getMappedRange());
@@ -107,7 +106,8 @@ export class BitonicSorter {
         const uniformBufferSize = 8; // Size of two uint32 values
         this.uniformsBuffer = this.context.device.createBuffer({
             size: uniformBufferSize,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            label: "bitonicSorter.uniformsBuffer"
         });
 
         this.numThreads = 1024;
@@ -174,9 +174,9 @@ export class BitonicSorter {
         // Sort
         for (let k = 2; k <= this.nElements; k <<= 1) {
             for (let j = k >> 1; j > 0; j = j >> 1) {
-                const commandEncoder = this.context.device.createCommandEncoder();
-
                 this.setUniforms(j, k);
+
+                const commandEncoder = this.context.device.createCommandEncoder();
                 const passEncoder = commandEncoder.beginComputePass();
                 passEncoder.setPipeline(this.pipeline);
                 passEncoder.setBindGroup(0, this.bindGroup);
@@ -216,6 +216,7 @@ export function testBitonic() {
             size: values.byteLength,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
             mappedAtCreation: true,
+            label: "testBitonic.valuesBuffer"
         });
         new Float32Array(valuesBuffer.getMappedRange()).set(values);
         valuesBuffer.unmap();
@@ -226,6 +227,7 @@ export function testBitonic() {
             size: values.byteLength,
             usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
             mappedAtCreation: false,
+            label: "testBitonic.readBuffer"
         });
         const commandEncoder = context.device.createCommandEncoder();
         commandEncoder.copyBufferToBuffer(argSortBuffer, 0, readBuffer, 0, values.byteLength);
