@@ -55,7 +55,8 @@ export class Renderer {
 
     drawPipeline: GPURenderPipeline;
 
-    projArray: number[][];
+    depthSortMatrix: number[][];
+    pointPositions: Vec3[] = [];
 
     destroyCallback: (() => void) | null = null;
 
@@ -105,6 +106,13 @@ export class Renderer {
         this.contextGpu = contextGpu;
 
         this.numGaussians = gaussians.numGaussians;
+        const positionsF32 = new Float32Array(gaussians.positionsBuffer);
+        this.pointPositions = positionsF32.slice(0, gaussians.numGaussians * 4).reduce((acc, _, i) => {
+            if (i % 4 == 0) {
+                acc.push(positionsF32.slice(i, i + 3) as Vec3);
+            }
+            return acc;
+        }, [] as Vec3[]);
 
         const presentationFormat = "rgba16float" as GPUTextureFormat;
 
@@ -211,10 +219,8 @@ export class Renderer {
         this.uniformBuffer.destroy();
         this.pointDataBuffer.destroy();
         this.drawIndexBuffer.destroy();
-        //this.drawIndexWriteBuffer.destroy();
+        this.depthSorter.destroy();
         this.context.destroy();
-        this.contextGpu = null as any;
-        this.drawPipeline = null as any;
         this.destroyCallback();
     }
 
@@ -222,7 +228,7 @@ export class Renderer {
         const commandEncoder = this.context.device.createCommandEncoder();
 
         // sort the draw order
-        const indexBufferSrc = this.depthSorter.sort(this.projArray);
+        const indexBufferSrc = await this.depthSorter.sort(this.depthSortMatrix);
 
         // copy the draw order to the draw index buffer
         commandEncoder.copyBufferToBuffer(
@@ -230,7 +236,7 @@ export class Renderer {
             0,
             this.drawIndexBuffer,
             0,
-            6 * 4 * this.depthSorter.nElements,
+            6 * 4 * this.depthSorter.nUnpadded,
         );
 
         const textureView = this.contextGpu.getCurrentTexture().createView();
@@ -251,6 +257,9 @@ export class Renderer {
 
         passEncoder.setIndexBuffer(this.drawIndexBuffer, "uint32" as GPUIndexFormat)
         passEncoder.drawIndexed(this.numGaussians * 6, 1, 0, 0, 0);
+        //for (let i = 0; i < this.numGaussians; i++) {
+        //    passEncoder.drawIndexed(6, 1, 6 * i, 0, 0);
+        //}
         passEncoder.end();
 
         this.context.device.queue.submit([commandEncoder.finish()]);
@@ -275,12 +284,12 @@ export class Renderer {
         const tanHalfFovX = 0.5 * this.canvas.width / camera.focalX;
         const tanHalfFovY = 0.5 * this.canvas.height / camera.focalY;
 
-        this.projArray = mat4toArrayOfArrays(camera.getProjMatrix());
+        this.depthSortMatrix = mat4toArrayOfArrays(camera.viewMatrix);
 
         let uniformsMatrixBuffer = new ArrayBuffer(this.uniformBuffer.size);
         let uniforms = {
             viewMatrix: mat4toArrayOfArrays(camera.viewMatrix),
-            projMatrix: this.projArray,
+            projMatrix: mat4toArrayOfArrays(camera.getProjMatrix()),
             cameraPosition: Array.from(position),
             tanHalfFovX: tanHalfFovX,
             tanHalfFovY: tanHalfFovY,
@@ -301,13 +310,16 @@ export class Renderer {
 
         //const depthProjection = camera.dotZ();
         //const depthsWithIndices: [number, number][] = [];
-        //for (let i = 0; i < this.pointPositions.length; i++) {
-        //    const index = this.drawOrder[i];
-        //    const position = this.pointPositions[index];
+        //for (let i = 0; i < this.numGaussians; i++) {
+        //    const position = this.pointPositions[i];
         //    const depth = depthProjection(position);
-        //    depthsWithIndices.push([depth, index]);
+        //    depthsWithIndices.push([depth, i]);
         //}
-        //this.drawOrder = depthsWithIndices.sort(([d1, i1], [d2, i2]) => (d1 - d2)).map(([d, i]) => i);
+        //const depths = depthsWithIndices.map(([d, i]) => d);
+        //console.log('cpu depths', depths);
+        //const drawOrder = depthsWithIndices.sort(([d1, i1], [d2, i2]) => (d1 - d2)).map(([d, i]) => i);
+        //console.log('cpu order', drawOrder);
+
 
         this.draw(() => this.animate());
     }

@@ -18,7 +18,6 @@ var currentRenderer: Renderer;
 function handlePlyChange(event: any) {
     const file = event.target.files[0];
 
-
     async function onFileLoad(arrayBuffer: ArrayBuffer) {
         if (currentRenderer) {
             await currentRenderer.destroy();

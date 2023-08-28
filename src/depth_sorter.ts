@@ -8,7 +8,7 @@ function nextPowerOfTwo(x: number): number {
 }
 
 // the depth of each vertex is computed, the excess space is padded with +inf
-function computeDepthShader(itemsPerThread: number): string {
+function computeDepthShader(itemsPerThread: number, numQuadsUnpadded: number): string {
     return `
 @group(0) @binding(0) var<storage, read> vertices: array<vec3<f32>>;
 @group(0) @binding(1) var<storage, read_write> depths: array<f32>;
@@ -17,8 +17,9 @@ function computeDepthShader(itemsPerThread: number): string {
 @compute @workgroup_size(1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     for (var i = global_id.x * ${itemsPerThread}; i < (global_id.x + 1) * ${itemsPerThread}; i++) {
-        if (i >= arrayLength(&vertices)) {
-            depths[i] = 1000000; // pad with +inf
+        //if (i >= arrayLength(&vertices)) {
+        if (i >= ${numQuadsUnpadded}) {
+            depths[i] = 1e20f; // pad with +inf
         } else {
             let pos = vertices[i];
             let projPos = projMatrix * vec4<f32>(pos, 1.0);
@@ -55,7 +56,7 @@ const projMatrixLayout = new mat4x4(f32);
 
 export class DepthSorter {
     context: GpuContext;
-    nElements: number;
+    nUnpadded: number;
     nPadded: number;
     numThreads: number;
 
@@ -63,7 +64,9 @@ export class DepthSorter {
     projMatrixBuffer: GPUBuffer; // projection matrix, set at each frame
     depthBuffer: GPUBuffer; // depth values, computed each time using uniforms, padded to next power of 2
     indexBuffer: GPUBuffer; // resulting index buffer, per vertex, 6 * #nElements
-    indicesReadoutBuffer: GPUBuffer; // readout of the depth buffer, for debugging
+
+    sortedReadoutBuffer: GPUBuffer; // readout of the sorted depth buffer for debugging, #nElements 
+    depthReadoutBuffer: GPUBuffer; // readout of the depth buffer for debugging, #nElements
 
     computeDepthPipeline: GPUComputePipeline;
     computeDepthBindGroup: GPUBindGroup;
@@ -75,9 +78,9 @@ export class DepthSorter {
 
     constructor(context: GpuContext, gaussians: PackedGaussians) {
         this.context = context;
-        this.nElements = gaussians.numGaussians;
-        this.nPadded = nextPowerOfTwo(this.nElements);
-        this.numThreads = 1024;
+        this.nUnpadded = gaussians.numGaussians;
+        this.nPadded = nextPowerOfTwo(this.nUnpadded);
+        this.numThreads = 2048;
 
         this.positionsBuffer = this.context.device.createBuffer({
             size: gaussians.positionsArrayLayout.size,
@@ -94,10 +97,16 @@ export class DepthSorter {
             label: "depthSorter.depthBuffer"
         });
 
-        this.indicesReadoutBuffer = this.context.device.createBuffer({
+        this.depthReadoutBuffer = this.context.device.createBuffer({
             size: this.nPadded * 4, // f32
             usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
             label: "depthSorter.depthReadoutBuffer"
+        });
+
+        this.sortedReadoutBuffer = this.context.device.createBuffer({
+            size: this.nPadded * 4, // u32
+            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+            label: "depthSorter.sortedReadoutBuffer"
         });
 
         this.projMatrixBuffer = this.context.device.createBuffer({
@@ -137,12 +146,12 @@ export class DepthSorter {
             bindGroupLayouts: [computeDepthBindGroupLayout],
         });
 
-        const itemsPerThread = Math.ceil(this.nElements / this.numThreads);
+        const paddedPerThread = Math.ceil(this.nPadded / this.numThreads);
         this.computeDepthPipeline = this.context.device.createComputePipeline({
             layout: computeDepthPipelineLayout, // would be easier to say layout: 'auto'
             compute: {
                 module: this.context.device.createShaderModule({
-                    code: computeDepthShader(itemsPerThread),
+                    code: computeDepthShader(paddedPerThread, this.nUnpadded),
                 }),
                 entryPoint: 'main',
             },
@@ -176,15 +185,16 @@ export class DepthSorter {
         this.sorter = new BitonicSorter(this.context, this.nPadded);
 
         this.indexBuffer = this.context.device.createBuffer({
-            size: this.nElements * 6 * 4,
+            size: this.nUnpadded * 6 * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
             label: "depthSorter.indexBuffer"
         });
 
+        const unpaddedPerThread = Math.ceil(this.nUnpadded / this.numThreads);
         this.copyToIndexBufferPipeline = this.context.device.createComputePipeline({
             compute: {
                 module: this.context.device.createShaderModule({
-                    code: copyToIndexBufferShader(itemsPerThread, this.nElements),
+                    code: copyToIndexBufferShader(unpaddedPerThread, this.nUnpadded),
                 }),
                 entryPoint: 'main',
             },
@@ -210,7 +220,19 @@ export class DepthSorter {
         });
     }
 
-    sort(projMatrix: number[][]): GPUBuffer {
+    destroy(): void {
+        this.positionsBuffer.destroy();
+        this.depthBuffer.destroy();
+        this.projMatrixBuffer.destroy();
+        this.indexBuffer.destroy();
+
+        this.depthReadoutBuffer.destroy();
+        this.sortedReadoutBuffer.destroy();
+
+        this.sorter.destroy();
+    }
+
+    async sort(projMatrix: number[][]): Promise<GPUBuffer> {
         const projMatrixCpuBuffer = new ArrayBuffer(projMatrixLayout.size);
         projMatrixLayout.pack(0, projMatrix, new DataView(projMatrixCpuBuffer));
 
@@ -230,11 +252,21 @@ export class DepthSorter {
             passEncoder.dispatchWorkgroups(this.numThreads);
             passEncoder.end();
 
+            //commandEncoder.copyBufferToBuffer(
+            //    this.depthBuffer,
+            //    0,
+            //    this.depthReadoutBuffer,
+            //    0,
+            //    this.nPadded * 4
+            //);
+
             this.context.device.queue.submit([commandEncoder.finish()]);
         }
 
-        // discard the result because we have already bound this.sorter.indicesBuffer to the copyToIndexBufferBindGroup
+        // discard the result because we have already bound
+        // this.sorter.indicesBuffer to the copyToIndexBufferBindGroup
         this.sorter.argsort(this.depthBuffer);
+
 
         { // copy the indices to the index buffer
             const commandEncoder = this.context.device.createCommandEncoder();
@@ -243,8 +275,27 @@ export class DepthSorter {
             passEncoder.setBindGroup(0, this.copyToIndexBufferBindGroup);
             passEncoder.dispatchWorkgroups(this.numThreads);
             passEncoder.end();
+
+            //commandEncoder.copyBufferToBuffer(
+            //    this.sorter.indicesBuffer,
+            //    0,
+            //    this.sortedReadoutBuffer,
+            //    0,
+            //    this.nPadded * 4
+            //);
+
             this.context.device.queue.submit([commandEncoder.finish()]);
         }
+
+        //await this.depthReadoutBuffer.mapAsync(GPUMapMode.READ);
+        //const depthReadoutArray = new Float32Array(this.depthReadoutBuffer.getMappedRange());
+        //console.log('gpu depth', Array.from(depthReadoutArray));//.slice(0, this.nElements)));
+        //this.depthReadoutBuffer.unmap();
+
+        //await this.sortedReadoutBuffer.mapAsync(GPUMapMode.READ);
+        //const sortedReadoutArray = new Uint32Array(this.sortedReadoutBuffer.getMappedRange());
+        //console.log('gpu order', Array.from(sortedReadoutArray));//.slice(0, this.nElements)));
+        //this.sortedReadoutBuffer.unmap();
 
         return this.indexBuffer;
     }

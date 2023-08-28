@@ -32,16 +32,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             continue;
         }
 
-        if ((i & k) == 0 && data.values[i] > data.values[ixj]) {
-            let tempV = data.values[i];
-            data.values[i] = data.values[ixj];
-            data.values[ixj] = tempV;
+        let swap_pos = ((i & k) == 0 && data.values[i] > data.values[ixj]);
+        let swap_neg = ((i & k) != 0 && data.values[i] < data.values[ixj]);
 
-            let tempI = indices.values[i];
-            indices.values[i] = indices.values[ixj];
-            indices.values[ixj] = tempI;
-        }
-        if ((i & k) != 0 && data.values[i] < data.values[ixj]) {
+        if (swap_pos || swap_neg) {
             let tempV = data.values[i];
             data.values[i] = data.values[ixj];
             data.values[ixj] = tempV;
@@ -110,7 +104,7 @@ export class BitonicSorter {
             label: "bitonicSorter.uniformsBuffer"
         });
 
-        this.numThreads = 1024;
+        this.numThreads = 2048;
         const itemsPerThread = Math.ceil(this.nElements / this.numThreads);
         this.pipeline = this.context.device.createComputePipeline({
             compute: {
@@ -151,6 +145,13 @@ export class BitonicSorter {
         const uniformsArray = new Uint32Array([j, k]);
         this.context.device.queue.writeBuffer(this.uniformsBuffer, 0, uniformsArray.buffer);
     };
+
+    public destroy(): void {
+        this.valuesBuffer.destroy();
+        this.indicesBuffer.destroy();
+        this.initialIndexBuffer.destroy();
+        this.uniformsBuffer.destroy();
+    }
 
     argsort(values: GPUBuffer): GPUBuffer {
         if (values.size != this.valuesBuffer.size) {
