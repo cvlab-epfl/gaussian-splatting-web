@@ -56,7 +56,6 @@ export class Renderer {
     drawPipeline: GPURenderPipeline;
 
     depthSortMatrix: number[][];
-    pointPositions: Vec3[] = [];
 
     destroyCallback: (() => void) | null = null;
 
@@ -106,13 +105,6 @@ export class Renderer {
         this.contextGpu = contextGpu;
 
         this.numGaussians = gaussians.numGaussians;
-        const positionsF32 = new Float32Array(gaussians.positionsBuffer);
-        this.pointPositions = positionsF32.slice(0, gaussians.numGaussians * 4).reduce((acc, _, i) => {
-            if (i % 4 == 0) {
-                acc.push(positionsF32.slice(i, i + 3) as Vec3);
-            }
-            return acc;
-        }, [] as Vec3[]);
 
         const presentationFormat = "rgba16float" as GPUTextureFormat;
 
@@ -257,9 +249,6 @@ export class Renderer {
 
         passEncoder.setIndexBuffer(this.drawIndexBuffer, "uint32" as GPUIndexFormat)
         passEncoder.drawIndexed(this.numGaussians * 6, 1, 0, 0, 0);
-        //for (let i = 0; i < this.numGaussians; i++) {
-        //    passEncoder.drawIndexed(6, 1, 6 * i, 0, 0);
-        //}
         passEncoder.end();
 
         this.context.device.queue.submit([commandEncoder.finish()]);
@@ -307,19 +296,6 @@ export class Renderer {
             0,
             uniformsMatrixBuffer.byteLength
         );
-
-        //const depthProjection = camera.dotZ();
-        //const depthsWithIndices: [number, number][] = [];
-        //for (let i = 0; i < this.numGaussians; i++) {
-        //    const position = this.pointPositions[i];
-        //    const depth = depthProjection(position);
-        //    depthsWithIndices.push([depth, i]);
-        //}
-        //const depths = depthsWithIndices.map(([d, i]) => d);
-        //console.log('cpu depths', depths);
-        //const drawOrder = depthsWithIndices.sort(([d1, i1], [d2, i2]) => (d1 - d2)).map(([d, i]) => i);
-        //console.log('cpu order', drawOrder);
-
 
         this.draw(() => this.animate());
     }

@@ -65,9 +65,6 @@ export class DepthSorter {
     depthBuffer: GPUBuffer; // depth values, computed each time using uniforms, padded to next power of 2
     indexBuffer: GPUBuffer; // resulting index buffer, per vertex, 6 * #nElements
 
-    sortedReadoutBuffer: GPUBuffer; // readout of the sorted depth buffer for debugging, #nElements 
-    depthReadoutBuffer: GPUBuffer; // readout of the depth buffer for debugging, #nElements
-
     computeDepthPipeline: GPUComputePipeline;
     computeDepthBindGroup: GPUBindGroup;
 
@@ -95,18 +92,6 @@ export class DepthSorter {
             size: this.nPadded * 4, // f32
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
             label: "depthSorter.depthBuffer"
-        });
-
-        this.depthReadoutBuffer = this.context.device.createBuffer({
-            size: this.nPadded * 4, // f32
-            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-            label: "depthSorter.depthReadoutBuffer"
-        });
-
-        this.sortedReadoutBuffer = this.context.device.createBuffer({
-            size: this.nPadded * 4, // u32
-            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-            label: "depthSorter.sortedReadoutBuffer"
         });
 
         this.projMatrixBuffer = this.context.device.createBuffer({
@@ -226,9 +211,6 @@ export class DepthSorter {
         this.projMatrixBuffer.destroy();
         this.indexBuffer.destroy();
 
-        this.depthReadoutBuffer.destroy();
-        this.sortedReadoutBuffer.destroy();
-
         this.sorter.destroy();
     }
 
@@ -252,14 +234,6 @@ export class DepthSorter {
             passEncoder.dispatchWorkgroups(this.numThreads);
             passEncoder.end();
 
-            //commandEncoder.copyBufferToBuffer(
-            //    this.depthBuffer,
-            //    0,
-            //    this.depthReadoutBuffer,
-            //    0,
-            //    this.nPadded * 4
-            //);
-
             this.context.device.queue.submit([commandEncoder.finish()]);
         }
 
@@ -276,26 +250,8 @@ export class DepthSorter {
             passEncoder.dispatchWorkgroups(this.numThreads);
             passEncoder.end();
 
-            //commandEncoder.copyBufferToBuffer(
-            //    this.sorter.indicesBuffer,
-            //    0,
-            //    this.sortedReadoutBuffer,
-            //    0,
-            //    this.nPadded * 4
-            //);
-
             this.context.device.queue.submit([commandEncoder.finish()]);
         }
-
-        //await this.depthReadoutBuffer.mapAsync(GPUMapMode.READ);
-        //const depthReadoutArray = new Float32Array(this.depthReadoutBuffer.getMappedRange());
-        //console.log('gpu depth', Array.from(depthReadoutArray));//.slice(0, this.nElements)));
-        //this.depthReadoutBuffer.unmap();
-
-        //await this.sortedReadoutBuffer.mapAsync(GPUMapMode.READ);
-        //const sortedReadoutArray = new Uint32Array(this.sortedReadoutBuffer.getMappedRange());
-        //console.log('gpu order', Array.from(sortedReadoutArray));//.slice(0, this.nElements)));
-        //this.sortedReadoutBuffer.unmap();
 
         return this.indexBuffer;
     }
