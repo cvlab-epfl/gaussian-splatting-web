@@ -8,23 +8,19 @@ function nextPowerOfTwo(x: number): number {
 }
 
 // the depth of each vertex is computed, the excess space is padded with +inf
-function computeDepthShader(itemsPerThread: number, numQuadsUnpadded: number): string {
+function computeDepthShader(itemsPerThread: number): string {
     return `
-struct Vertices {
-    values: array<vec3<f32>>,
-}
-
-@group(0) @binding(0) var<storage, read> vertices: Vertices;
+@group(0) @binding(0) var<storage, read> vertices: array<vec3<f32>>;
 @group(0) @binding(1) var<storage, read_write> depths: array<f32>;
 @group(0) @binding(2) var<uniform> projMatrix: mat4x4<f32>;
 
 @compute @workgroup_size(1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     for (var i = global_id.x * ${itemsPerThread}; i < (global_id.x + 1) * ${itemsPerThread}; i++) {
-        if (i >= ${numQuadsUnpadded}) {
+        if (i >= arrayLength(&vertices)) {
             depths[i] = 1000000; // pad with +inf
         } else {
-            let pos = vertices.values[i];
+            let pos = vertices[i];
             let projPos = projMatrix * vec4<f32>(pos, 1.0);
             depths[i] = projPos.z;
         }
@@ -146,7 +142,7 @@ export class DepthSorter {
             layout: computeDepthPipelineLayout, // would be easier to say layout: 'auto'
             compute: {
                 module: this.context.device.createShaderModule({
-                    code: computeDepthShader(itemsPerThread, this.nElements),
+                    code: computeDepthShader(itemsPerThread),
                 }),
                 entryPoint: 'main',
             },
