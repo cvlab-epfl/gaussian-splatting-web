@@ -1,3 +1,12 @@
+// The bitonic sort algorithm itself is implemented in bitonic.ts
+// but we need to do some extra work to sort the depth buffer:
+// 1. compute the depth of each vertex
+// 2. pad the depth buffer to the next power of 2
+// 3. sort the depth buffer
+// 4. copy the indices to the index buffer, replicating each index 6 times (since each quad has 6 vertices)
+//
+// This file implements steps 1, 2 and 4.
+
 import { GpuContext } from './gpu_context';
 import { BitonicSorter } from './bitonic';
 import { PackedGaussians } from './ply';
@@ -61,6 +70,11 @@ export class DepthSorter {
     numThreads: number;
 
     positionsBuffer: GPUBuffer; // vertex positions, set once, #nElements
+
+    // TODO: we're using the entire projection matrix and compute (x, y, z, w) of each
+    // vertex, but we only need the z component. We could save some bandwidth by
+    // only sending the z component of the projection matrix and only computing
+    // the z component of each vertex.
     projMatrixBuffer: GPUBuffer; // projection matrix, set at each frame
     depthBuffer: GPUBuffer; // depth values, computed each time using uniforms, padded to next power of 2
     indexBuffer: GPUBuffer; // resulting index buffer, per vertex, 6 * #nElements
@@ -79,6 +93,7 @@ export class DepthSorter {
         this.nPadded = nextPowerOfTwo(this.nUnpadded);
         this.numThreads = 2048;
 
+        // buffer for the vertex positions, set once
         this.positionsBuffer = this.context.device.createBuffer({
             size: gaussians.positionsArrayLayout.size,
             usage: GPUBufferUsage.STORAGE,
@@ -88,19 +103,22 @@ export class DepthSorter {
         new Uint8Array(this.positionsBuffer.getMappedRange()).set(new Uint8Array(gaussians.positionsBuffer));
         this.positionsBuffer.unmap();
         
+        // buffer for the depth values, computed each time using uniforms, padded to next power of 2
         this.depthBuffer = this.context.device.createBuffer({
             size: this.nPadded * 4, // f32
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
             label: "depthSorter.depthBuffer"
         });
 
+        // buffer for the projection matrix, set at each frame
         this.projMatrixBuffer = this.context.device.createBuffer({
             size: projMatrixLayout.size,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
             label: "depthSorter.projMatrixBuffer"
         });
 
-        // manually create the bind group layout because this.computeDepthPipeline.getBindGroupLayout(0) doesn't work for some reason
+        // manually create the bind group layout because
+        // this.computeDepthPipeline.getBindGroupLayout(0) doesn't work for some reason
         const computeDepthBindGroupLayout = this.context.device.createBindGroupLayout({
             entries: [
                 {
@@ -169,6 +187,7 @@ export class DepthSorter {
 
         this.sorter = new BitonicSorter(this.context, this.nPadded);
 
+        // buffer for the resulting index buffer, per vertex, 6 * #nElements
         this.indexBuffer = this.context.device.createBuffer({
             size: this.nUnpadded * 6 * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,

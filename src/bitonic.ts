@@ -1,3 +1,6 @@
+// Implements a bitonic argsort on the GPU.
+// It would be more efficient to use a radix sort, but this is simpler to implement.
+
 import { GpuContext } from "./gpu_context";
 
 function bitonicSortShader(itemsPerThread: number): string {
