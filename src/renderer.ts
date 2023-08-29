@@ -10,9 +10,11 @@
 
 import { PackedGaussians } from './ply';
 import { f32, Struct, vec3, mat4x4 } from './packing';
-import { Camera, InteractiveCamera } from './camera';
+import { InteractiveCamera } from './camera';
 import { getShaderCode } from './shaders';
 import { Mat4, Vec3 } from 'wgpu-matrix';
+import { GpuContext } from './gpu_context';
+import { DepthSorter } from './depth_sorter';
 
 const uniformLayout = new Struct([
     ['viewMatrix', new mat4x4(f32)],
@@ -37,36 +39,43 @@ function mat4toArrayOfArrays(m: Mat4): number[][] {
 export class Renderer {
     canvas: HTMLCanvasElement;
     interactiveCamera: InteractiveCamera;
+    numGaussians: number;
 
-    adapter: GPUAdapter;
-    device: GPUDevice;
+    context: GpuContext;
     contextGpu: GPUCanvasContext;
 
     uniformBuffer: GPUBuffer;
     pointDataBuffer: GPUBuffer;
-    drawOrder: number[];
-    pointPositions: Vec3[];
+    drawIndexBuffer: GPUBuffer;
 
-    pipeline: GPURenderPipeline;
+    depthSorter: DepthSorter;
+
+    uniformsBindGroup: GPUBindGroup;
+    pointDataBindGroup: GPUBindGroup;
+
+    drawPipeline: GPURenderPipeline;
+
+    depthSortMatrix: number[][];
+
+    // fps counter
+    fpsCounter: HTMLLabelElement;
+    lastDraw: number;
 
     destroyCallback: (() => void) | null = null;
 
-    // we need an async init function because we need to request certain async methods
-    public static async init(canvas: HTMLCanvasElement, gaussians: PackedGaussians, interactiveCamera: InteractiveCamera): Promise<Renderer> {
-        if (!canvas) {
-            return Promise.reject("Canvas not found!");
-        }
-
-        if (!navigator.gpu) {
+    public static async requestContext(gaussians: PackedGaussians): Promise<GpuContext> {
+        const gpu = navigator.gpu;
+        if (!gpu) {
             return Promise.reject("WebGPU not supported on this browser! (navigator.gpu is null)");
         }
-        const adapter = await navigator.gpu.requestAdapter();
+
+        const adapter = await gpu.requestAdapter();
         if (!adapter) {
-            return Promise.reject("WebGPU is not supported on this browser! (WebGPU adapter not found)");
+            return Promise.reject("WebGPU not supported on this browser! (gpu.adapter is null)");
         }
 
-        const byteLength = gaussians.gaussiansBuffer.byteLength;
         // for good measure, we request 1.5 times the amount of memory we need
+        const byteLength = gaussians.gaussiansBuffer.byteLength;
         const device = await adapter.requestDevice({
             requiredLimits: {
                 maxStorageBufferBindingSize: 1.5 * byteLength,
@@ -74,12 +83,7 @@ export class Renderer {
             }
         });
 
-        const contextGpu = canvas.getContext("webgpu");
-        if (!contextGpu) {
-            return Promise.reject("WebGPU context not found!");
-        }
-
-        return new Renderer(canvas, interactiveCamera, gaussians, adapter, device, contextGpu);
+        return new GpuContext(gpu, adapter, device);
     }
 
     // destroy the renderer and return a promise that resolves when it's done (after the next frame)
@@ -89,47 +93,54 @@ export class Renderer {
         });
     }
 
-    private constructor(
+    constructor(
         canvas: HTMLCanvasElement,
         interactiveCamera: InteractiveCamera,
         gaussians: PackedGaussians,
-        adapter: GPUAdapter,
-        device: GPUDevice,
-        contextGPU: GPUCanvasContext,
+        context: GpuContext,
+        fpsCounter: HTMLLabelElement,
     ) {
         this.canvas = canvas;
         this.interactiveCamera = interactiveCamera;
-        this.adapter = adapter;
-        this.device = device;
-        this.contextGpu = contextGPU;
+        this.context = context;
+        const contextGpu = canvas.getContext("webgpu");
+        if (!contextGpu) {
+            throw new Error("WebGPU context not found!");
+        }
+        this.contextGpu = contextGpu;
+        this.fpsCounter = fpsCounter;
+        this.lastDraw = performance.now();
+
+        this.numGaussians = gaussians.numGaussians;
 
         const presentationFormat = "rgba16float" as GPUTextureFormat;
 
         this.contextGpu.configure({
-            device,
+            device: this.context.device,
             format: presentationFormat,
             alphaMode: 'premultiplied' as GPUCanvasAlphaMode,
         });
 
-        this.pointDataBuffer = device.createBuffer({
+        this.pointDataBuffer = this.context.device.createBuffer({
             size: gaussians.gaussianArrayLayout.size,
             usage: GPUBufferUsage.STORAGE,
             mappedAtCreation: true,
+            label: "renderer.pointDataBuffer",
         });
         new Uint8Array(this.pointDataBuffer.getMappedRange()).set(new Uint8Array(gaussians.gaussiansBuffer));
         this.pointDataBuffer.unmap();
 
-
         // Create a GPU buffer for the uniform data.
-        this.uniformBuffer = device.createBuffer({
+        this.uniformBuffer = this.context.device.createBuffer({
             size: uniformLayout.size,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            label: "renderer.uniformBuffer",
         });
 
         const shaderCode = getShaderCode(canvas, gaussians.sphericalHarmonicsDegree, gaussians.nShCoeffs);
-        const shaderModule = device.createShaderModule({ code: shaderCode });
+        const shaderModule = this.context.device.createShaderModule({ code: shaderCode });
 
-        this.pipeline = device.createRenderPipeline({
+        this.drawPipeline = this.context.device.createRenderPipeline({
             layout: "auto",
             vertex: {
                 module: shaderModule,
@@ -166,18 +177,66 @@ export class Renderer {
             },
         });
 
-        // point positions for sorting by depth
-        this.pointPositions = gaussians.positionsArray;
-        // sorting is faster on partially sorted lists so we keep the old indices around,
-        // initialized to the identity permutation 
-        this.drawOrder = Array.from(Array(this.pointPositions.length).keys());
+        this.uniformsBindGroup = this.context.device.createBindGroup({
+            layout: this.drawPipeline.getBindGroupLayout(0),
+            entries: [{
+                binding: 0,
+                resource: {
+                    buffer: this.uniformBuffer,
+                },
+            }],
+        });
+
+        this.pointDataBindGroup = this.context.device.createBindGroup({
+            layout: this.drawPipeline.getBindGroupLayout(1),
+            entries: [{
+                binding: 1,
+                resource: {
+                    buffer: this.pointDataBuffer,
+                },
+            }],
+        });
+
+        this.depthSorter = new DepthSorter(this.context, gaussians);
+
+        this.drawIndexBuffer = this.context.device.createBuffer({
+           size: 6 * 4 * gaussians.numGaussians,
+           usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+           mappedAtCreation: false,
+           label: "renderer.drawIndexBuffer",
+        });
 
         // start the animation loop
-        requestAnimationFrame(() => this.animate());
+        requestAnimationFrame(() => this.animate(true));
     }
 
-    draw(nextFrameCallback: FrameRequestCallback) {
-        const commandEncoder = this.device.createCommandEncoder();
+    private destroyImpl(): void {
+        if (this.destroyCallback === null) {
+            throw new Error("destroyImpl called without destroyCallback set!");
+        }
+
+        this.uniformBuffer.destroy();
+        this.pointDataBuffer.destroy();
+        this.drawIndexBuffer.destroy();
+        this.depthSorter.destroy();
+        this.context.destroy();
+        this.destroyCallback();
+    }
+
+    draw(nextFrameCallback: FrameRequestCallback): void {
+        const commandEncoder = this.context.device.createCommandEncoder();
+
+        // sort the draw order
+        const indexBufferSrc = this.depthSorter.sort(this.depthSortMatrix);
+
+        // copy the draw order to the draw index buffer
+        commandEncoder.copyBufferToBuffer(
+            indexBufferSrc,
+            0,
+            this.drawIndexBuffer,
+            0,
+            6 * 4 * this.depthSorter.nUnpadded,
+        );
 
         const textureView = this.contextGpu.getCurrentTexture().createView();
         const renderPassDescriptor: GPURenderPassDescriptor = {
@@ -190,52 +249,33 @@ export class Renderer {
         };
 
         const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
-        passEncoder.setPipeline(this.pipeline);
-        passEncoder.setBindGroup(0, this.device.createBindGroup({
-            layout: this.pipeline.getBindGroupLayout(0),
-            entries: [{
-                binding: 0,
-                resource: {
-                    buffer: this.uniformBuffer,
-                },
-            }],
-        }));
-        passEncoder.setBindGroup(1, this.device.createBindGroup({
-            layout: this.pipeline.getBindGroupLayout(1),
-            entries: [{
-                binding: 1,
-                resource: {
-                    buffer: this.pointDataBuffer,
-                },
-            }],
-        }));
+        passEncoder.setPipeline(this.drawPipeline);
 
-        //passEncoder.draw(6 * gaussians.numPoints, 1, 0, 0);
-        for (let i = 0; i < this.drawOrder.length; i++) {
-            const quadId = this.drawOrder[i];
-            passEncoder.draw(6, 1, 6 * quadId, 0);
-        }
+        passEncoder.setBindGroup(0, this.uniformsBindGroup);
+        passEncoder.setBindGroup(1, this.pointDataBindGroup);
 
+        passEncoder.setIndexBuffer(this.drawIndexBuffer, "uint32" as GPUIndexFormat)
+        passEncoder.drawIndexed(this.numGaussians * 6, 1, 0, 0, 0);
         passEncoder.end();
 
-        this.device.queue.submit([commandEncoder.finish()]);
+        this.context.device.queue.submit([commandEncoder.finish()]);
 
-        if (this.destroyCallback === null) {
-            requestAnimationFrame(nextFrameCallback);
-        } else {
-            this.uniformBuffer.destroy();
-            this.pointDataBuffer.destroy();
-            this.device.destroy();
-            this.adapter = null as any;
-            this.device = null as any;
-            this.contextGpu = null as any;
-            this.pipeline = null as any;
-            this.destroyCallback();
-        }
+        // fps counter
+        const now = performance.now();
+        const fps = 1000 / (now - this.lastDraw);
+        this.lastDraw = now;
+        this.fpsCounter.innerText = 'FPS: ' + fps.toFixed(2);
+        this.fpsCounter.style.display = 'block';
+
+        requestAnimationFrame(nextFrameCallback);
     }
 
-    animate() {
-        if (!this.interactiveCamera.isDirty()) {
+    animate(forceDraw?: boolean) {
+        if (this.destroyCallback !== null) {
+            this.destroyImpl();
+            return;
+        }
+        if (!this.interactiveCamera.isDirty() && !forceDraw) {
             requestAnimationFrame(() => this.animate());
             return;
         }
@@ -245,6 +285,8 @@ export class Renderer {
 
         const tanHalfFovX = 0.5 * this.canvas.width / camera.focalX;
         const tanHalfFovY = 0.5 * this.canvas.height / camera.focalY;
+
+        this.depthSortMatrix = mat4toArrayOfArrays(camera.viewMatrix);
 
         let uniformsMatrixBuffer = new ArrayBuffer(this.uniformBuffer.size);
         let uniforms = {
@@ -260,23 +302,13 @@ export class Renderer {
         };
         uniformLayout.pack(0, uniforms, new DataView(uniformsMatrixBuffer));
 
-        this.device.queue.writeBuffer(
+        this.context.device.queue.writeBuffer(
             this.uniformBuffer,
             0,
             uniformsMatrixBuffer,
             0,
             uniformsMatrixBuffer.byteLength
         );
-
-        const depthProjection = camera.dotZ();
-        const depthsWithIndices: [number, number][] = [];
-        for (let i = 0; i < this.pointPositions.length; i++) {
-            const index = this.drawOrder[i];
-            const position = this.pointPositions[index];
-            const depth = depthProjection(position);
-            depthsWithIndices.push([depth, index]);
-        }
-        this.drawOrder = depthsWithIndices.sort(([d1, i1], [d2, i2]) => (d1 - d2)).map(([d, i]) => i);
 
         this.draw(() => this.animate());
     }

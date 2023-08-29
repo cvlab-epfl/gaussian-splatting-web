@@ -41,9 +41,11 @@ export class PackedGaussians {
 
     gaussianLayout: PackingType;
     public gaussianArrayLayout: PackingType;
+    positionsLayout: PackingType;
+    public positionsArrayLayout: PackingType;
 
-    positionsArray: Vec3[];
     gaussiansBuffer: ArrayBuffer;
+    positionsBuffer: ArrayBuffer;
 
     private static decodeHeader(plyArrayBuffer: ArrayBuffer): [number, Record<string, string>, DataView] {
         /* decodes the .ply file header and returns a tuple of:
@@ -196,13 +198,19 @@ export class PackedGaussians {
         // define the layout of the entire point cloud
         this.gaussianArrayLayout = new StaticArray(this.gaussianLayout, vertexCount);
 
+        this.positionsLayout = new vec3(f32);
+        this.positionsArrayLayout = new StaticArray(this.positionsLayout, vertexCount);
+
         // pack the points
-        this.positionsArray = [];
         this.gaussiansBuffer = new ArrayBuffer(this.gaussianArrayLayout.size);
         const gaussianWriteView = new DataView(this.gaussiansBuffer);
 
+        this.positionsBuffer = new ArrayBuffer(this.positionsArrayLayout.size);
+        const positionsWriteView = new DataView(this.positionsBuffer);
+
         var readOffset = 0;
         var gaussianWriteOffset = 0;
+        var positionWriteOffset = 0;
         for (let i = 0; i < vertexCount; i++) {
             const [newReadOffset, rawVertex] = this.readRawVertex(readOffset, vertexData, propertyTypes);
             readOffset = newReadOffset;
@@ -212,7 +220,11 @@ export class PackedGaussians {
                 gaussianWriteView,
             );
 
-            this.positionsArray.push([rawVertex.x, rawVertex.y, rawVertex.z]);
+            positionWriteOffset = this.positionsLayout.pack(
+                positionWriteOffset,
+                [rawVertex.x, rawVertex.y, rawVertex.z],
+                positionsWriteView,
+            );
         }
     }
 }
