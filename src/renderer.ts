@@ -259,7 +259,6 @@ export class Renderer {
         passEncoder.end();
 
         this.context.device.queue.submit([commandEncoder.finish()]);
-        console.log('Drawn');
 
         // fps counter
         const now = performance.now();

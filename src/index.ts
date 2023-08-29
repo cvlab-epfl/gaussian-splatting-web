@@ -1,18 +1,21 @@
 import { loadFileAsArrayBuffer, PackedGaussians } from './ply';
 import { CameraFileParser, InteractiveCamera } from './camera';
 import { Renderer } from './renderer';
-import { testBitonic } from './bitonic';
-
-const canvas = document.getElementById("canvas-webgpu") as HTMLCanvasElement;
-const loadingPopup = document.getElementById('loading-popup')!;
-const fpsCounter = document.getElementById('fps-counter')! as HTMLLabelElement;
 
 if (!navigator.gpu) {
     alert("WebGPU not supported on this browser! (navigator.gpu is null)");
 }
 
-let interactiveCamera = InteractiveCamera.default(canvas);
+// grab the DOM elements
+const canvas = document.getElementById("canvas-webgpu") as HTMLCanvasElement;
+const loadingPopup = document.getElementById('loading-popup')! as HTMLDivElement;
+const fpsCounter = document.getElementById('fps-counter')! as HTMLLabelElement;
+const cameraFileInput = document.getElementById('cameraButton')! as HTMLInputElement;
+const cameraList = document.getElementById('cameraList')! as HTMLUListElement;
+const plyFileInput = document.getElementById('plyButton') as HTMLInputElement;
 
+// create the camera and renderer globals
+let interactiveCamera = InteractiveCamera.default(canvas);
 var currentRenderer: Renderer;
 
 // swap the renderer when the ply file changes
@@ -42,7 +45,7 @@ function handlePlyChange(event: any) {
     }
 }
 
-// start by loading the default ply file
+// loads the default ply file (bundled with the source) at startup, useful for dev
 async function loadDefaultPly() {
     const url = "pc_short.ply";
     loadingPopup.style.display = 'block'; // show loading popup
@@ -53,16 +56,16 @@ async function loadDefaultPly() {
     const renderer = new Renderer(canvas, interactiveCamera, gaussians, context, fpsCounter);
     currentRenderer = renderer; // bind to the global scope
     loadingPopup.style.display = 'none'; // hide loading popup
-
 }
 
-loadDefaultPly();
+// DEV: uncomment this line to load the default ply file at startup
+//loadDefaultPly();
 
-const plyFileInput = document.getElementById('plyButton');
+// add event listeners
 plyFileInput!.addEventListener('change', handlePlyChange);
-
-const cameraFileInput = document.getElementById('cameraButton')! as HTMLInputElement;
-const cameraList = document.getElementById('cameraList')! as HTMLUListElement;
-new CameraFileParser(cameraFileInput, cameraList, canvas, interactiveCamera.setNewCamera.bind(interactiveCamera));
-
-//testBitonic();
+new CameraFileParser(
+    cameraFileInput,
+    cameraList,
+    canvas,
+    (camera) => interactiveCamera.setNewCamera(camera),
+);
