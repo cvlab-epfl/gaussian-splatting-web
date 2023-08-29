@@ -174,7 +174,7 @@ export class InteractiveCamera {
         this.canvas.addEventListener('mousemove', (e) => {
             if (!this.drag) return false;
             this.dRX = (e.pageX - this.oldX) * 2 * Math.PI / this.canvas.width;
-            this.dRY = (e.pageY - this.oldY) * 2 * Math.PI / this.canvas.height;
+            this.dRY = -(e.pageY - this.oldY) * 2 * Math.PI / this.canvas.height;
             this.oldX = e.pageX;
             this.oldY = e.pageY;
             this.setDirty();
