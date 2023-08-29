@@ -63,6 +63,17 @@
             text-align: left;
         }
 
+        /* reduce margins on the instructions list */
+        #instructions p {
+            margin-bottom: 0.2em;
+        }
+
+        /* reduce margins on the instructions list */
+        #instructions ul, #instructions ol, #instructions li {
+            margin-top: 0.1em;
+            margin-left: -0.5em;
+        }
+
         #cameraList li {
             margin-bottom: 5px;
         }
@@ -117,18 +128,20 @@
                         list.</li>
                 </ol>
 
-                <p><strong>Moving:</strong></p>
+                <p><strong>Mouse controls:</strong></p>
                 <ul>
-                    <li><strong>W/S</strong> up/down image plane</li>
-                    <li><strong>A/D</strong> left/right</li>
-                    <li><strong>Q/E</strong> forward/backward</li>
+                    <li><strong>Click + drag</strong> rotate yaw/pitch</li>
+                    <li><strong>Scroll wheel</strong> move forward/backward</li>
                 </ul>
 
-                <p><strong>Rotating:</strong></p>
+                <p><strong>Keyboard controls:</strong></p>
                 <ul>
-                    <li><strong>J/L</strong> yaw</li>
-                    <li><strong>I/K</strong> pitch</li>
-                    <li><strong>U/O</strong> roll</li>
+                    <li><strong>W/S</strong> move up/down image plane</li>
+                    <li><strong>A/D</strong> move left/right</li>
+                    <li><strong>Q/E</strong> move forward/backward</li>
+                    <li><strong>J/L</strong> rotate yaw</li>
+                    <li><strong>I/K</strong> rotate pitch</li>
+                    <li><strong>U/O</strong> rotate roll</li>
                 </ul>
             </div>
             <a href="https://github.com/cvlab-epfl/gaussian-splatting-web">Source</a>
