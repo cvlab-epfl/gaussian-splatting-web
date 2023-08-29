@@ -200,7 +200,7 @@ export class Renderer {
         });
 
         // start the animation loop
-        requestAnimationFrame(() => this.animate());
+        requestAnimationFrame(() => this.animate(true));
     }
 
     private destroyImpl(): void {
@@ -216,11 +216,11 @@ export class Renderer {
         this.destroyCallback();
     }
 
-    async draw(nextFrameCallback: FrameRequestCallback): Promise<void> {
+    draw(nextFrameCallback: FrameRequestCallback): void {
         const commandEncoder = this.context.device.createCommandEncoder();
 
         // sort the draw order
-        const indexBufferSrc = await this.depthSorter.sort(this.depthSortMatrix);
+        const indexBufferSrc = this.depthSorter.sort(this.depthSortMatrix);
 
         // copy the draw order to the draw index buffer
         commandEncoder.copyBufferToBuffer(
@@ -254,15 +254,15 @@ export class Renderer {
         this.context.device.queue.submit([commandEncoder.finish()]);
         console.log('Drawn');
 
-        if (this.destroyCallback === null) {
-            requestAnimationFrame(nextFrameCallback);
-        } else {
-            this.destroyImpl();
-        }
+        requestAnimationFrame(nextFrameCallback);
     }
 
-    animate() {
-        if (!this.interactiveCamera.isDirty()) {
+    animate(forceDraw?: boolean) {
+        if (this.destroyCallback !== null) {
+            this.destroyImpl();
+            return;
+        }
+        if (!this.interactiveCamera.isDirty() && !forceDraw) {
             requestAnimationFrame(() => this.animate());
             return;
         }

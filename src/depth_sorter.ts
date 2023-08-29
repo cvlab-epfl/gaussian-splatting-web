@@ -214,7 +214,7 @@ export class DepthSorter {
         this.sorter.destroy();
     }
 
-    async sort(projMatrix: number[][]): Promise<GPUBuffer> {
+    sort(projMatrix: number[][]): GPUBuffer {
         const projMatrixCpuBuffer = new ArrayBuffer(projMatrixLayout.size);
         projMatrixLayout.pack(0, projMatrix, new DataView(projMatrixCpuBuffer));
 

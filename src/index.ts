@@ -37,10 +37,7 @@ function handlePlyChange(event: any) {
     if (file) {
         loadingPopup.style.display = 'block'; // show loading popup
         loadFileAsArrayBuffer(file)
-            .then(onFileLoad)
-            .catch((error) => {
-                alert(error);
-            });
+            .then(onFileLoad);
     }
 }
 
