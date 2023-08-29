@@ -5,8 +5,9 @@
 This repository contains the source for an interactive web viewer of NeRFs crated with the code available from [INRIA](https://github.com/graphdeco-inria/gaussian-splatting). The app with instructions is hosted at [jatentaki.github.io](https://jatentaki.github.io/portfolio/gaussian-splatting/).
 
 ## Building
-This project has been created using **webpack-cli**, you can run
+This project has been created using **webpack-cli**. Before the first build, go to the code directory and execute `npm install` to install dependencies.
 
+Afterwards, you can use
 ```
 npm run build
 ```
