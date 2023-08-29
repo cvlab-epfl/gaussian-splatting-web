@@ -56,12 +56,12 @@ export class BitonicSorter {
     numThreads: number;
 
     pipeline: GPUComputePipeline;
-    bindGroup: GPUBindGroup;
+    bindGroups: GPUBindGroup[];
 
     valuesBuffer: GPUBuffer; // The buffer to sort
     indicesBuffer: GPUBuffer; // The indices of the values (to be sorted)
     initialIndexBuffer: GPUBuffer; // The initial indices of the values, to copy from at each call
-    uniformsBuffer: GPUBuffer;
+    uniformBuffers: GPUBuffer[]; // The uniform buffers to use for each dispatch
 
     constructor(context: GpuContext, nElements: number) {
         if (Math.log2(nElements) % 1 != 0) {
@@ -97,13 +97,6 @@ export class BitonicSorter {
         }
         this.initialIndexBuffer.unmap();
 
-        const uniformBufferSize = 8; // Size of two uint32 values
-        this.uniformsBuffer = this.context.device.createBuffer({
-            size: uniformBufferSize,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-            label: "bitonicSorter.uniformsBuffer"
-        });
-
         this.numThreads = 2048;
         const itemsPerThread = Math.ceil(this.nElements / this.numThreads);
         this.pipeline = this.context.device.createComputePipeline({
@@ -116,41 +109,65 @@ export class BitonicSorter {
             layout: 'auto',
         });
 
-        this.bindGroup = this.context.device.createBindGroup({
-            layout: this.pipeline.getBindGroupLayout(0),
-            entries: [
-                {
-                    binding: 0,
-                    resource: {
-                        buffer: this.valuesBuffer
-                    }
-                },
-                {
-                    binding: 1,
-                    resource: {
-                        buffer: this.indicesBuffer,
-                    }
-                },
-                {
-                    binding: 2,
-                    resource: {
-                        buffer: this.uniformsBuffer
-                    }
-                }
-            ],
-        });
+        this.createUniforms();
     }
 
-    private setUniforms(j: number, k: number): void {
-        const uniformsArray = new Uint32Array([j, k]);
-        this.context.device.queue.writeBuffer(this.uniformsBuffer, 0, uniformsArray.buffer);
-    };
+    private createUniforms(): void {
+        const gpuBuffers = [];
+        const gpuBindGroups = [];
+
+        for (let k = 2; k <= this.nElements; k <<= 1) {
+            for (let j = k >> 1; j > 0; j = j >> 1) {
+                const bufferContent = new Uint32Array([j, k]);
+                const gpuBuffer = this.context.device.createBuffer({
+                    size: bufferContent.byteLength,
+                    usage: GPUBufferUsage.UNIFORM,
+                    mappedAtCreation: true,
+                    label: `bitonicSorter.uniformsBuffer.k=${k}.j=${j}`
+                });
+                new Uint32Array(gpuBuffer.getMappedRange()).set(bufferContent);
+                gpuBuffer.unmap();
+
+                const gpuBindGroup = this.context.device.createBindGroup({
+                    layout: this.pipeline.getBindGroupLayout(0),
+                    entries: [
+                        {
+                            binding: 0,
+                            resource: {
+                                buffer: this.valuesBuffer
+                            },
+                        },
+                        {
+                            binding: 1,
+                            resource: {
+                                buffer: this.indicesBuffer,
+                            },
+                        },
+                        {
+                            binding: 2,
+                            resource: {
+                                buffer: gpuBuffer
+                            },
+                        },
+                    ],
+                });
+
+                gpuBuffers.push(gpuBuffer);
+                gpuBindGroups.push(gpuBindGroup);
+            }
+        }
+
+        this.uniformBuffers = gpuBuffers;
+        this.bindGroups = gpuBindGroups;
+    }
 
     public destroy(): void {
         this.valuesBuffer.destroy();
         this.indicesBuffer.destroy();
         this.initialIndexBuffer.destroy();
-        this.uniformsBuffer.destroy();
+        for (const uniformBuffer of this.uniformBuffers) {
+            uniformBuffer.destroy();
+        }
     }
 
     argsort(values: GPUBuffer): GPUBuffer {
@@ -159,33 +176,25 @@ export class BitonicSorter {
         }
 
         // Copy the data to the GPU
-        {
-            const commandEncoder = this.context.device.createCommandEncoder();
-            // clear just in case
-            commandEncoder.clearBuffer(this.valuesBuffer);
-            // copy the values
-            commandEncoder.copyBufferToBuffer(values, 0, this.valuesBuffer, 0, values.size);
+        const commandEncoder = this.context.device.createCommandEncoder();
+        // clear just in case
+        commandEncoder.clearBuffer(this.valuesBuffer);
+        // copy the values
+        commandEncoder.copyBufferToBuffer(values, 0, this.valuesBuffer, 0, values.size);
 
-            // write the initial indices
-            commandEncoder.copyBufferToBuffer(this.initialIndexBuffer, 0, this.indicesBuffer, 0, this.initialIndexBuffer.size);
+        // write the initial indices
+        commandEncoder.copyBufferToBuffer(this.initialIndexBuffer, 0, this.indicesBuffer, 0, this.initialIndexBuffer.size);
 
-            this.context.device.queue.submit([commandEncoder.finish()]);
+        // Sort by dispatching the compute shader for each uniform buffer
+        for (const uniformBindGroup of this.bindGroups) {
+            const passEncoder = commandEncoder.beginComputePass();
+            passEncoder.setPipeline(this.pipeline);
+            passEncoder.setBindGroup(0, uniformBindGroup);
+            passEncoder.dispatchWorkgroups(this.numThreads);
+            passEncoder.end();
         }
 
-        // Sort
-        for (let k = 2; k <= this.nElements; k <<= 1) {
-            for (let j = k >> 1; j > 0; j = j >> 1) {
-                this.setUniforms(j, k);
-
-                const commandEncoder = this.context.device.createCommandEncoder();
-                const passEncoder = commandEncoder.beginComputePass();
-                passEncoder.setPipeline(this.pipeline);
-                passEncoder.setBindGroup(0, this.bindGroup);
-                passEncoder.dispatchWorkgroups(this.numThreads);
-                passEncoder.end();
-                this.context.device.queue.submit([commandEncoder.finish()]);
-            }
-        }
+        this.context.device.queue.submit([commandEncoder.finish()]);
 
         return this.indicesBuffer;
     }
