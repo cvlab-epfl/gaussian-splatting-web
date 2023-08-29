@@ -5,6 +5,7 @@ import { testBitonic } from './bitonic';
 
 const canvas = document.getElementById("canvas-webgpu") as HTMLCanvasElement;
 const loadingPopup = document.getElementById('loading-popup')!;
+const fpsCounter = document.getElementById('fps-counter')! as HTMLLabelElement;
 
 if (!navigator.gpu) {
     alert("WebGPU not supported on this browser! (navigator.gpu is null)");
@@ -25,7 +26,7 @@ function handlePlyChange(event: any) {
         const gaussians = new PackedGaussians(arrayBuffer);
         try {
             const context = await Renderer.requestContext(gaussians);
-            const renderer = new Renderer(canvas, interactiveCamera, gaussians, context);
+            const renderer = new Renderer(canvas, interactiveCamera, gaussians, context, fpsCounter);
             currentRenderer = renderer; // bind to the global scope
             loadingPopup.style.display = 'none'; // hide loading popup
         } catch (error) {
@@ -49,7 +50,7 @@ async function loadDefaultPly() {
     const arrayBuffer = await content.arrayBuffer();
     const gaussians = new PackedGaussians(arrayBuffer);
     const context = await Renderer.requestContext(gaussians);
-    const renderer = new Renderer(canvas, interactiveCamera, gaussians, context);
+    const renderer = new Renderer(canvas, interactiveCamera, gaussians, context, fpsCounter);
     currentRenderer = renderer; // bind to the global scope
     loadingPopup.style.display = 'none'; // hide loading popup
 

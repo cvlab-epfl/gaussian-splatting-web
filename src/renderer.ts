@@ -57,6 +57,10 @@ export class Renderer {
 
     depthSortMatrix: number[][];
 
+    // fps counter
+    fpsCounter: HTMLLabelElement;
+    lastDraw: number;
+
     destroyCallback: (() => void) | null = null;
 
     public static async requestContext(gaussians: PackedGaussians): Promise<GpuContext> {
@@ -94,6 +98,7 @@ export class Renderer {
         interactiveCamera: InteractiveCamera,
         gaussians: PackedGaussians,
         context: GpuContext,
+        fpsCounter: HTMLLabelElement,
     ) {
         this.canvas = canvas;
         this.interactiveCamera = interactiveCamera;
@@ -103,6 +108,8 @@ export class Renderer {
             throw new Error("WebGPU context not found!");
         }
         this.contextGpu = contextGpu;
+        this.fpsCounter = fpsCounter;
+        this.lastDraw = performance.now();
 
         this.numGaussians = gaussians.numGaussians;
 
@@ -253,6 +260,13 @@ export class Renderer {
 
         this.context.device.queue.submit([commandEncoder.finish()]);
         console.log('Drawn');
+
+        // fps counter
+        const now = performance.now();
+        const fps = 1000 / (now - this.lastDraw);
+        this.lastDraw = now;
+        this.fpsCounter.innerText = 'FPS: ' + fps.toFixed(2);
+        this.fpsCounter.style.display = 'block';
 
         requestAnimationFrame(nextFrameCallback);
     }
