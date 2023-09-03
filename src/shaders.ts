@@ -302,7 +302,7 @@ fn vs_points(@builtin(vertex_index) vertex_index: u32) -> PointOutput {
     var projPosition = uniforms.projMatrix * vec4<f32>(point.position, 1.0);
     projPosition = projPosition / projPosition.w;
     output.position = vec4<f32>(projPosition.xy + 2 * radius_ndc * quadOffset, projPosition.zw);
-    output.color = compute_color_from_sh(uniforms.camera_position, point.sh);
+    output.color = compute_color_from_sh(point.position, point.sh);
     output.uv = radius_px * quadOffset;
 
     return output;
