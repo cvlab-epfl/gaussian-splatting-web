@@ -1,6 +1,6 @@
 {
   "name": "gaussian-splatting-web",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "A webGPU renderer for Gaussian splatting NeRFs",
   "main": "index.js",
   "scripts": {

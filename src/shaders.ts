@@ -45,20 +45,15 @@ const shDeg3Code = `
             SH_C2[3] * xz * sh[7] +
             SH_C2[4] * (xx - yy) * sh[8];
         
-        // We disable the 3rd degree for now because of a bug causing the entire render
-        // to be black. This appears to be a webGPU issue. If uncomment SH_C3[0...3] it works,
-        // if you uncomment SH_C3[4...6] it works, if you uncomment the whole and divide by 10
-        // it's black.
-
         // if (sh_degree > 2) {
-        //result = result +
-        //    SH_C3[0] * y * (3. * xx - yy) * sh[9] +
-        //    SH_C3[1] * xy * z * sh[10] +
-        //    SH_C3[2] * y * (4. * zz - xx - yy) * sh[11] +
-        //    SH_C3[3] * z * (2. * zz - 3. * xx - 3. * yy) * sh[12] +
-        //    SH_C3[4] * x * (4. * zz - xx - yy) * sh[13] +
-        //    SH_C3[5] * z * (xx - yy) * sh[14] +
-        //    SH_C3[6] * x * (xx - 3. * yy) * sh[15];
+        result = result +
+            SH_C3[0] * y * (3. * xx - yy) * sh[9] +
+            SH_C3[1] * xy * z * sh[10] +
+            SH_C3[2] * y * (4. * zz - xx - yy) * sh[11] +
+            SH_C3[3] * z * (2. * zz - 3. * xx - 3. * yy) * sh[12] +
+            SH_C3[4] * x * (4. * zz - xx - yy) * sh[13] +
+            SH_C3[5] * z * (xx - yy) * sh[14] +
+            SH_C3[6] * x * (xx - 3. * yy) * sh[15];
 
         // unconditional
         result = result + 0.5;
@@ -302,7 +297,7 @@ fn vs_points(@builtin(vertex_index) vertex_index: u32) -> PointOutput {
     var projPosition = uniforms.projMatrix * vec4<f32>(point.position, 1.0);
     projPosition = projPosition / projPosition.w;
     output.position = vec4<f32>(projPosition.xy + 2 * radius_ndc * quadOffset, projPosition.zw);
-    output.color = compute_color_from_sh(uniforms.camera_position, point.sh);
+    output.color = compute_color_from_sh(point.position, point.sh);
     output.uv = radius_px * quadOffset;
 
     return output;

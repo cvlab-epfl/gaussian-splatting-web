@@ -18,17 +18,17 @@ npm run serve
 to have a live-updating server.
 
 ## Browser compatibility
-The official compatiblity table of WebGPU can be found [here](https://developer.mozilla.org/en-US/docs/Web/API/WebGPU_API#browser_compatibility). In practice, I have only succeeded in running it on MacOS and Ubuntu.
+The official compatiblity table of WebGPU can be found [here](https://developer.mozilla.org/en-US/docs/Web/API/WebGPU_API#browser_compatibility). In practice, the following are known to work:
 
 **MacOS**: works with recent (version 115+) Chrome/Chromium browsers.
+
+**Windows**: works with Edge 116+, most likely with Chrome/Chromium as well (it's the same thing but I was not able to test).
 
 **Ubuntu**: works with Chrome dev version and custom flags. The steps are as follows:
 1. Download and install [Chrome dev](https://www.google.com/chrome/dev/).
 2. Launch from command line with extra flags: `google-chrome-unstable --enable-features=Vulkan,UseSkiaRenderer`.
 3. Go to `chrome://flags/#enable-unsafe-webgpu` and enable webgpu. Restart the browser for the change to take effect, make sure to use the flags from the previous step as well.
 4. The Gaussian viewer should work.
-
-**Windows**: recent Chrome is supposed to work (per implementation status) but in practice the renders are completely nonsensical. See [this tracking issue](https://github.com/cvlab-epfl/gaussian-splatting-web/issues/16).
 
 **Firefox**: the nightly channel is supposed to support webGPU experimentally but in practice it fails on parsing my shaders across MacOS/Ubuntu.
 
