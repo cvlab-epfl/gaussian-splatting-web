@@ -23,7 +23,7 @@ function computeDepthShader(itemsPerThread: number, numQuadsUnpadded: number): s
 @group(0) @binding(1) var<storage, read_write> depths: array<f32>;
 @group(0) @binding(2) var<uniform> projMatrix: mat4x4<f32>;
 
-@compute @workgroup_size(1)
+@compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     for (var i = global_id.x * ${itemsPerThread}; i < (global_id.x + 1) * ${itemsPerThread}; i++) {
         //if (i >= arrayLength(&vertices)) {
@@ -42,10 +42,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 // each quad index is repeated 6 times, once for each vertex
 function copyToIndexBufferShader(itemsPerThread: number, numQuadsUnpadded: number): string {
     return `
-@group(0) @binding(0) var<storage, read> indices: array<u32>;
-@group(0) @binding(1) var<storage, read_write> indexBuffer: array<u32>;
+struct IndexVertex {
+    vec1: u32,
+    vec2: u32,
+    vec3: u32,
+    vec4: u32,
+    vec5: u32,
+    vec6: u32,
+};
 
-@compute @workgroup_size(1)
+@group(0) @binding(0) var<storage, read> indices: array<u32>;
+@group(0) @binding(1) var<storage, read_write> indexBuffer: array<IndexVertex>;
+
+var<private> vertex: IndexVertex;
+
+@compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     for (var i = global_id.x * ${itemsPerThread}; i < (global_id.x + 1) * ${itemsPerThread}; i++) {
         if (i >= ${numQuadsUnpadded}) {
@@ -53,9 +64,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
         let index = indices[i];
 
-        for (var vertex = 0u; vertex < 6; vertex++) {
-            indexBuffer[i * 6 + vertex] = index * 6 + vertex;
-        }
+        vertex.vec1 = index * 6 + 0;
+        vertex.vec2 = index * 6 + 1;
+        vertex.vec3 = index * 6 + 2;
+        vertex.vec4 = index * 6 + 3;
+        vertex.vec5 = index * 6 + 4;
+        vertex.vec6 = index * 6 + 5;
+        indexBuffer[i] = vertex;
     }
 }
 `
@@ -250,7 +265,7 @@ export class DepthSorter {
             const passEncoder = commandEncoder.beginComputePass();
             passEncoder.setPipeline(this.computeDepthPipeline);
             passEncoder.setBindGroup(0, this.computeDepthBindGroup);
-            passEncoder.dispatchWorkgroups(this.numThreads);
+            passEncoder.dispatchWorkgroups(this.numThreads / 64);
             passEncoder.end();
 
             this.context.device.queue.submit([commandEncoder.finish()]);
@@ -266,7 +281,7 @@ export class DepthSorter {
             const passEncoder = commandEncoder.beginComputePass();
             passEncoder.setPipeline(this.copyToIndexBufferPipeline);
             passEncoder.setBindGroup(0, this.copyToIndexBufferBindGroup);
-            passEncoder.dispatchWorkgroups(this.numThreads);
+            passEncoder.dispatchWorkgroups(this.numThreads / 64);
             passEncoder.end();
 
             this.context.device.queue.submit([commandEncoder.finish()]);

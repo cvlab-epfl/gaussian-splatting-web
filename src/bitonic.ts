@@ -3,50 +3,83 @@
 
 import { GpuContext } from "./gpu_context";
 
+const WGSIZE = 128;
+
 function bitonicSortShader(itemsPerThread: number): string {
     return `
-struct Data {
-    values: array<f32>,
-};
-
-struct Indices {
-    values: array<u32>,
-};
-
 // Uniform buffer to store j and k
 struct Uniforms {
     j: u32,
     k: u32,
 };
 
-@binding(0) @group(0) var<storage, read_write> data: Data;
-@binding(1) @group(0) var<storage, read_write> indices: Indices;
+@binding(0) @group(0) var<storage, read_write> data: array<vec4f>;
+@binding(1) @group(0) var<storage, read_write> indices: array<vec4<u32>>;
 @binding(2) @group(0) var<uniform> uniforms: Uniforms;
 
-@compute @workgroup_size(1)
+@compute @workgroup_size(${WGSIZE})
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let j = uniforms.j;
     let k = uniforms.k;
     
-    for (var i = global_id.x * ${itemsPerThread}; i < (global_id.x + 1) * ${itemsPerThread}; i++) {
-        let ixj = i ^ j;
+    let max = (global_id.x + 1) * ${itemsPerThread};
+    for (var n = global_id.x * ${itemsPerThread}; n < max && (max ^ j) > max; n += 4) {
+       var datan = data[n / 4];
+       var indicesn = indices[n / 4];
+       var swap = false;
+       var dataixj = vec4f(0, 0, 0, 0);
+       var indicesixj = vec4<u32>(0, 0, 0, 0);
+       var lastIxjLoadedMajorIdx: u32 = 0;
+       for (var l: u32 = 0; l < 4; l++) {
+           let i = n + l;
+           let datai = datan[l];
+           let indicesi = indicesn[l];
 
-        if (ixj <= i) {
-            continue;
-        }
+           let ixj = i ^ j;
+           if (ixj <= i) {
+               continue;
+           }
 
-        let swap_pos = ((i & k) == 0 && data.values[i] > data.values[ixj]);
-        let swap_neg = ((i & k) != 0 && data.values[i] < data.values[ixj]);
+           let ixjMajor = ixj / 4;
+           let ixjMinor = ixj % 4;
+           let writeToWorkgroupBlock = (ixjMajor == n / 4);
+           if (writeToWorkgroupBlock) {
+               dataixj = datan;
+               indicesixj = indicesn;
+               lastIxjLoadedMajorIdx = 0;
+           } else if (lastIxjLoadedMajorIdx != ixjMajor) {
+               if (lastIxjLoadedMajorIdx != 0) {
+                   data[lastIxjLoadedMajorIdx] = dataixj;
+                   indices[lastIxjLoadedMajorIdx] = indicesixj;
+               } 
+               dataixj = data[ixjMajor];
+               indicesixj = indices[ixjMajor];
+               lastIxjLoadedMajorIdx = ixjMajor;
+           }
 
-        if (swap_pos || swap_neg) {
-            let tempV = data.values[i];
-            data.values[i] = data.values[ixj];
-            data.values[ixj] = tempV;
+           let swap_pos = ((i & k) == 0 && datai > dataixj[ixjMinor]);
+           let swap_neg = ((i & k) != 0 && datai < dataixj[ixjMinor]);
 
-            let tempI = indices.values[i];
-            indices.values[i] = indices.values[ixj];
-            indices.values[ixj] = tempI;
-        }
+           if (swap_pos || swap_neg) {
+               swap = true;
+               datan[l] = dataixj[ixjMinor];
+               dataixj[ixjMinor] = datai;
+               indicesn[l] = indicesixj[ixjMinor];
+               indicesixj[ixjMinor] = indicesi;
+               if (writeToWorkgroupBlock) {
+                   datan[ixjMinor] = datai;
+                   indicesn[ixjMinor] = indicesi;
+               }
+           }
+       }
+       if (swap) {
+           data[n / 4] = datan;
+           indices[n / 4] = indicesn;
+       }
+       if (lastIxjLoadedMajorIdx != 0) {
+          data[lastIxjLoadedMajorIdx] = dataixj;
+          indices[lastIxjLoadedMajorIdx] = indicesixj;
+       }
     }
 }
 `;
@@ -100,7 +133,7 @@ export class BitonicSorter {
         }
         this.initialIndexBuffer.unmap();
 
-        this.numThreads = 2048;
+        this.numThreads = 8192;
         const itemsPerThread = Math.ceil(this.nElements / this.numThreads);
         this.pipeline = this.context.device.createComputePipeline({
             compute: {
@@ -193,7 +226,7 @@ export class BitonicSorter {
             const passEncoder = commandEncoder.beginComputePass();
             passEncoder.setPipeline(this.pipeline);
             passEncoder.setBindGroup(0, uniformBindGroup);
-            passEncoder.dispatchWorkgroups(this.numThreads);
+            passEncoder.dispatchWorkgroups(this.numThreads / WGSIZE);
             passEncoder.end();
         }
 
